@@ -1,0 +1,143 @@
+syntax = "proto3";
+package anos.v2;
+option go_package = "anos/internal/proto;pb";
+
+// --------------------
+// Core primitive types
+// --------------------
+
+message Hash32 { bytes v = 1; }   // must be exactly 32 bytes
+message Sig64  { bytes v = 1; }   // ed25519 signature (64 bytes)
+message Pub32  { bytes v = 1; }   // ed25519 public key (32 bytes)
+
+// AccountId is the ed25519 public key bytes for v1 prototype.
+message AccountId { bytes v = 1; } // 32 bytes
+
+// --------------------
+// Core protocol objects
+// --------------------
+
+enum TxType {
+  TX_TYPE_UNSPECIFIED = 0;
+  TX_TYPE_SEND        = 1;
+  TX_TYPE_RECEIVE     = 2;
+}
+
+message TxBodySend {
+  AccountId to = 1;
+  uint64 amount = 2;
+  uint64 fee = 3;
+  Hash32 receivable_id = 4; // deterministically derived from txid
+}
+
+message TxBodyReceive {
+  Hash32 receivable_id = 1;
+}
+
+// Canonical bytes-to-sign for a transaction.
+// Rule: signature = Ed25519( SHA256( serialize(TxSignable) ) )
+message TxSignable {
+  TxType type = 1;
+
+  AccountId account = 2;  // the account chain being extended
+  Hash32 prev = 3;        // previous tx hash (zero/empty means genesis head)
+  uint64 seq = 4;         // monotonic per-account sequence
+
+  oneof body {
+    TxBodySend send = 10;
+    TxBodyReceive receive = 11;
+  }
+}
+
+message Tx {
+  TxType type = 1;
+
+  AccountId account = 2;  // the account chain being extended
+  Hash32 prev = 3;        // previous tx hash (zero/empty means genesis head)
+  uint64 seq = 4;         // monotonic per-account sequence
+
+  oneof body {
+    TxBodySend send = 10;
+    TxBodyReceive receive = 11;
+  }
+
+  Sig64 sig = 20;         // signature over TxSignable canonical bytes (see above)
+}
+
+message Receivable {
+  Hash32 id = 1;
+  AccountId from = 2;
+  AccountId to = 3;
+  uint64 amount = 4;
+  uint64 fee = 5;
+  Hash32 created_by_tx = 6;
+  bool claimed = 7;
+  Hash32 claimed_by_tx = 8;
+}
+
+message EpochRecord {
+  uint64 epoch = 1;
+  repeated Hash32 accepted_txs = 2;
+  Hash32 state_root = 3;
+  Hash32 prev_epoch_hash = 4; // hash-chain epochs for audit
+}
+
+// --------------------
+// API Envelope messages
+// (for /submit, /account, /receivables)
+// --------------------
+
+// Generic error for API responses.
+message ApiError {
+  uint32 code = 1;        // HTTP-ish or app-specific code (e.g., 400, 403, 500)
+  string message = 2;     // human-readable summary
+  string detail = 3;      // optional extra info (stack, debug, etc.)
+}
+
+// /submit
+message SubmitTxRequest {
+  Tx tx = 1;
+}
+
+message SubmitTxResponse {
+  bool ok = 1;
+
+  // Optional: txid as computed by validators (or client) for display/debug.
+  Hash32 txid = 2;
+
+  // If ok=false, error is set.
+  ApiError error = 3;
+}
+
+// /account
+message AccountState {
+  AccountId account = 1;
+
+  // Current head tx hash (zero/empty means genesis head)
+  Hash32 head = 2;
+
+  uint64 balance = 3;
+  uint64 seq = 4;
+}
+
+message GetAccountRequest {
+  AccountId account = 1;
+}
+
+message GetAccountResponse {
+  bool ok = 1;
+  AccountState state = 2;
+  ApiError error = 3;
+}
+
+// /receivables
+message ListReceivablesRequest {
+  AccountId account = 1;     // list receivables destined to this account
+  bool include_claimed = 2;  // default false
+}
+
+message ListReceivablesResponse {
+  bool ok = 1;
+  repeated Receivable receivables = 2;
+  ApiError error = 3;
+}

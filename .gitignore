@@ -1,0 +1,99 @@
+# =========================
+# Go build artifacts
+# =========================
+/bin/
+/dist/
+/build/
+*.exe
+*.out
+*.test
+*.prof
+
+# Go test cache
+.coverage
+*.coverprofile
+
+# =========================
+# Go modules / tooling
+# =========================
+/vendor/
+go.work
+go.work.sum
+
+# =========================
+# Local databases & state
+# =========================
+*.db
+*.db-lock
+*.bolt
+*.sqlite
+*.sqlite3
+
+# Validator runtime state
+validator.db
+validator*.db
+
+# =========================
+# Environment & secrets
+# =========================
+.env
+.env.*
+*.key
+*.pem
+*.seed
+*.secret
+
+# NEVER commit validator seed
+*VALIDATOR_SEED*
+*seed.hex*
+
+# =========================
+# Logs & runtime output
+# =========================
+*.log
+logs/
+tmp/
+temp/
+
+# =========================
+# OS / editor junk
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# IntelliJ / GoLand
+.idea/
+*.iml
+
+# =========================
+# Protobuf generated files
+# (uncomment if you want them generated, not committed)
+# =========================
+# internal/proto/*.pb.go
+
+# =========================
+# Simulation artifacts
+# =========================
+sim-output/
+sim-keys/
+sim-wallets/
+
+# =========================
+# Archives
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# =========================
+# Misc
+# =========================
+*.swp
+*.swo
