@@ -83,10 +83,18 @@ func ValidateTxAgainstSnapshot(tx *pb.Tx, snap *Snapshot) ([32]byte, error) {
 		}
 		amt := sb.Send.Amount
 		fee := sb.Send.Fee
+
+		// Enforce fee schedule (SEND only)
+		exp := ExpectedFee(amt)
+		if fee != exp {
+			return [32]byte{}, errors.New("bad fee")
+		}
+
 		if as.Balance < amt+fee {
 			return [32]byte{}, ErrInsufficientBal
 		}
-		// If client provided receivable_id, it must match derived value
+
+		// If client provided receivable_id, it must match derived value (recipient receivable)
 		if sb.Send.ReceivableId != nil && len(sb.Send.ReceivableId.V) == 32 {
 			want := crypto.ReceivableIDFromTxID(txid)
 			if !bytes.Equal(sb.Send.ReceivableId.V, want[:]) {
@@ -114,7 +122,7 @@ func ValidateTxAgainstSnapshot(tx *pb.Tx, snap *Snapshot) ([32]byte, error) {
 
 // ApplyTx applies a validated tx to DB state.
 // It assumes prev/seq correctness was checked against snapshot and updates haven't happened mid-commit.
-func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte) error {
+func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAcct [32]byte) error {
 	if hasTx(view.tx, txid) {
 		return nil
 	}
@@ -146,14 +154,23 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte) error 
 		}
 		amt := sb.Amount
 		fee := sb.Fee
+
+		// Enforce fee schedule (SEND only)
+		exp := ExpectedFee(amt)
+		if fee != exp {
+			return errors.New("bad fee")
+		}
+
 		if bal < amt+fee {
 			return ErrInsufficientBal
 		}
 		bal -= (amt + fee)
 
-		// create receivable
+		// -------------------------
+		// Recipient receivable (amount)
+		// -------------------------
 		rid := crypto.ReceivableIDFromTxID(txid)
-		// If client provided receivable_id, it must match
+		// If client provided receivable_id, it must match (recipient receivable)
 		if sb.ReceivableId != nil && len(sb.ReceivableId.V) == 32 && !bytes.Equal(sb.ReceivableId.V, rid[:]) {
 			return errors.New("receivable_id mismatch")
 		}
@@ -165,12 +182,31 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte) error 
 			From:        &pb.AccountId{V: acct[:]},
 			To:          &pb.AccountId{V: toAcct[:]},
 			Amount:      amt,
-			Fee:         fee,
+			Fee:         0, // fee is NOT attached to recipient; fee has its own receivable to Fund
 			CreatedByTx: &pb.Hash32{V: txid[:]},
 			Claimed:     false,
 		}
 		rr, _ := proto.Marshal(rec)
 		if err := putReceivableRaw(view.tx, rid, rr); err != nil {
+			return err
+		}
+
+		// -------------------------
+		// Fund fee receivable (fee)
+		// -------------------------
+		feeRid := crypto.FeeReceivableIDFromTxID(txid)
+
+		frec := &pb.Receivable{
+			Id:          &pb.Hash32{V: feeRid[:]},
+			From:        &pb.AccountId{V: acct[:]},
+			To:          &pb.AccountId{V: fundAcct[:]},
+			Amount:      fee,
+			Fee:         0,
+			CreatedByTx: &pb.Hash32{V: txid[:]},
+			Claimed:     false,
+		}
+		frr, _ := proto.Marshal(frec)
+		if err := putReceivableRaw(view.tx, feeRid, frr); err != nil {
 			return err
 		}
 

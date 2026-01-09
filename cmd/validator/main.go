@@ -45,6 +45,17 @@ func main() {
 
 	pub, priv := crypto.ValidatorKeypairFromSeed(seed)
 
+	fundHex := strings.TrimSpace(os.Getenv("FUND_ACCOUNT_HEX"))
+	if fundHex == "" {
+		log.Fatal("FUND_ACCOUNT_HEX is required (32-byte hex public key)")
+	}
+	fundBytes, err := hex.DecodeString(fundHex)
+	if err != nil || len(fundBytes) != 32 {
+		log.Fatal("FUND_ACCOUNT_HEX must decode to exactly 32 bytes")
+	}
+	var fundAcct [32]byte
+	copy(fundAcct[:], fundBytes)
+
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		log.Fatal(err)
@@ -58,6 +69,7 @@ func main() {
 		Peers:         peers,
 		EpochDuration: time.Duration(epochMS) * time.Millisecond,
 		QuorumPercent: 80,
+		FundAccount:   fundAcct,
 	})
 	if err != nil {
 		log.Fatal(err)

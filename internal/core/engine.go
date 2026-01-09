@@ -29,6 +29,8 @@ type EngineConfig struct {
 	QuorumPercent  int // used only for conflict resolution
 	HTTPClient     *http.Client
 	CandidatesSkew time.Duration
+
+	FundAccount [32]byte
 }
 
 type Engine struct {
@@ -502,7 +504,7 @@ func (e *Engine) applyWinners(winners map[[32]byte][32]byte, txBytesByID map[[32
 			if raw == nil || p == nil {
 				continue
 			}
-			_ = ApplyTx(view, raw, p, id)
+			_ = ApplyTx(view, raw, p, id, e.cfg.FundAccount)
 		}
 		return nil
 	})

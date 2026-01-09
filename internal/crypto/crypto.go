@@ -17,9 +17,10 @@ var (
 
 // Domain tags (ASCII, includes trailing null byte)
 var (
-	domainTxSignable  = []byte("ANOSv2-TxSignable\x00")
-	domainReceivable  = []byte("ANOSv2-Receivable\x00")
-	domainCandidates  = []byte("ANOSv2-Candidates\x00")
+	domainTxSignable    = []byte("ANOSv2-TxSignable\x00")
+	domainReceivable    = []byte("ANOSv2-Receivable\x00")
+	domainFeeReceivable = []byte("ANOSv2-FeeReceivable\x00")
+	domainCandidates    = []byte("ANOSv2-Candidates\x00")
 )
 
 // Hash32 returns SHA256(b).
@@ -151,6 +152,14 @@ func TxID(tx *pb.Tx) ([32]byte, error) {
 func ReceivableIDFromTxID(txid [32]byte) [32]byte {
 	buf := make([]byte, 0, len(domainReceivable)+32)
 	buf = append(buf, domainReceivable...)
+	buf = append(buf, txid[:]...)
+	return sha256.Sum256(buf)
+}
+
+// FeeReceivableIDFromTxID computes fee_receivable_id = SHA256("ANOSv2-FeeReceivable\0" || txid).
+func FeeReceivableIDFromTxID(txid [32]byte) [32]byte {
+	buf := make([]byte, 0, len(domainFeeReceivable)+32)
+	buf = append(buf, domainFeeReceivable...)
 	buf = append(buf, txid[:]...)
 	return sha256.Sum256(buf)
 }
