@@ -1,6 +1,7 @@
 package main
 
 import (
+	"anos/internal/core"
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -35,11 +36,18 @@ func main() {
 	fmt.Println("Bob  :", boHex)
 
 	// Fund Alice (dev/admin). With start-of-epoch snapshot, wait one epoch so next snapshot includes faucet.
-	mustPOST(baseURL + "/faucet?acct=" + alHex + "&amount=1000")
+	mustPOST(baseURL + "/faucet?acct=" + alHex + "&amount=10000000")
+
 	time.Sleep(time.Duration(epochMS)*time.Millisecond + 300*time.Millisecond)
 
 	// Fetch Alice state
 	alState := mustGetAccount(baseURL, alPub)
+
+	// Set Amount to Send
+	amount := uint64(1 * core.UnitsPerAnos)
+
+	// Calculate Fee
+	fee := core.ExpectedFee(amount)
 
 	// Build SEND tx from Alice to Bob
 	send := &pb.Tx{
@@ -49,8 +57,8 @@ func main() {
 		Seq:     alState.Seq + 1,
 		Body: &pb.Tx_Send{Send: &pb.TxBodySend{
 			To:     &pb.AccountId{V: boPub},
-			Amount: 250,
-			Fee:    1,
+			Amount: amount,
+			Fee:    fee,
 			// ReceivableId may be set after txid derivation, but is NOT part of signing bytes for SEND.
 		}},
 	}
@@ -124,12 +132,14 @@ func mustGetAccount(baseURL string, acct []byte) *pb.AccountState {
 	if !resp.Ok || resp.State == nil {
 		panic(fmt.Sprintf("account failed: %v", resp.Error))
 	}
-	fmt.Printf("acct=%s bal=%d seq=%d head=%s\n",
+	fmt.Printf("acct=%s bal_units=%d bal_anos=%.6f seq=%d head=%s\n",
 		hex.EncodeToString(acct)[:8],
 		resp.State.Balance,
+		float64(resp.State.Balance)/float64(core.UnitsPerAnos),
 		resp.State.Seq,
 		hex.EncodeToString(resp.State.Head.V)[:8],
 	)
+
 	return resp.State
 }
 
