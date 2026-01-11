@@ -3,7 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
+	"crypto/ecdsa"
 	"errors"
 	"net/http"
 	"sort"
@@ -20,9 +20,9 @@ import (
 )
 
 type EngineConfig struct {
-	DB            *bbolt.DB
-	ValidatorPriv ed25519.PrivateKey // 64 bytes
-	ValidatorPub  ed25519.PublicKey  // 32 bytes
+	DB           *bbolt.DB
+	Signer       ValidatorSigner
+	ValidatorSet map[[33]byte]*ecdsa.PublicKey // validator_id -> pubkey (membership)
 
 	Peers          []string
 	EpochDuration  time.Duration
@@ -36,20 +36,19 @@ type EngineConfig struct {
 type Engine struct {
 	cfg EngineConfig
 
-	mu        sync.Mutex
-	mempool   [][]byte
-	peerLists map[uint64]map[string]*CandidateList
+	mu      sync.Mutex
+	mempool [][]byte
+	// epoch -> validator_id -> candidate list
+	peerLists map[uint64]map[[33]byte]*CandidateList
 
 	startOnce sync.Once
-
-	peerIDs map[string][32]byte // peer baseURL -> validator pubkey (32 bytes)
 }
 
 type CandidateList struct {
 	Epoch       uint64
-	ValidatorID [32]byte
+	ValidatorID [33]byte
 	ListHash    [32]byte
-	Sig         [64]byte
+	SigDER      []byte   // ASN.1 DER ECDSA signature
 	Txs         [][]byte // raw protobuf-encoded pb.Tx messages
 }
 
@@ -57,8 +56,15 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	if cfg.DB == nil {
 		return nil, errors.New("missing db")
 	}
-	if len(cfg.ValidatorPriv) != ed25519.PrivateKeySize || len(cfg.ValidatorPub) != ed25519.PublicKeySize {
-		return nil, errors.New("missing validator keypair")
+	if cfg.Signer == nil {
+		return nil, errors.New("missing signer")
+	}
+	if len(cfg.ValidatorSet) == 0 {
+		return nil, errors.New("missing validator set")
+	}
+	selfID := cfg.Signer.PublicKeyCompressed()
+	if _, ok := cfg.ValidatorSet[selfID]; !ok {
+		return nil, errors.New("signer public key not present in validator set")
 	}
 	if cfg.EpochDuration <= 0 {
 		cfg.EpochDuration = 5 * time.Second
@@ -75,9 +81,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	e := &Engine{
 		cfg:       cfg,
 		mempool:   make([][]byte, 0, 1024),
-		peerLists: make(map[uint64]map[string]*CandidateList),
-		peerIDs:   make(map[string][32]byte),
+		peerLists: make(map[uint64]map[[33]byte]*CandidateList),
 	}
+
 	if err := cfg.DB.Update(func(tx *bbolt.Tx) error { return ensureBuckets(tx) }); err != nil {
 		return nil, err
 	}
@@ -149,18 +155,61 @@ func (e *Engine) ListReceivables(toAcct [32]byte) ([]*pb.Receivable, error) {
 
 // ReceiveCandidateList stores a peer candidate list for an epoch after verifying signature and list hash.
 func (e *Engine) ReceiveCandidateList(fromURL string, cl *CandidateList) error {
+	_ = fromURL // identity is the pubkey, not URL
+
+	// 1) membership check
+	pub := e.cfg.ValidatorSet[cl.ValidatorID]
+	if pub == nil {
+		return errors.New("unknown validator")
+	}
+
+	// 2) recompute txids and canonical list hash
+	txids := make([][32]byte, 0, len(cl.Txs))
+	for _, raw := range cl.Txs {
+		tx, err := ParseTx(raw)
+		if err != nil {
+			return errors.New("bad tx in candidate list")
+		}
+		id, err := crypto.TxID(tx)
+		if err != nil {
+			return errors.New("bad txid")
+		}
+		txids = append(txids, id)
+	}
+	sort.Slice(txids, func(i, j int) bool { return bytes.Compare(txids[i][:], txids[j][:]) < 0 })
+	recomputed := crypto.CandidatesListHash(txids)
+	if recomputed != cl.ListHash {
+		return errors.New("reject: list_hash mismatch")
+	}
+
+	// 3) verify signature
+	digest := crypto.CandidatesDigestP256(cl.Epoch, cl.ValidatorID, cl.ListHash)
+	if !crypto.VerifyCandidatesSigP256(pub, digest, cl.SigDER) {
+		return errors.New("reject: bad signature")
+	}
+
+	// 4) store by (epoch, validator_id)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if e.peerLists == nil {
-		e.peerLists = make(map[uint64]map[string]*CandidateList)
+		e.peerLists = make(map[uint64]map[[33]byte]*CandidateList)
 	}
 	m := e.peerLists[cl.Epoch]
 	if m == nil {
-		m = make(map[string]*CandidateList)
+		m = make(map[[33]byte]*CandidateList)
 		e.peerLists[cl.Epoch] = m
 	}
-	m[fromURL] = cl
+
+	if prev := m[cl.ValidatorID]; prev != nil {
+		// idempotent accept if identical
+		if prev.ListHash == cl.ListHash && bytes.Equal(prev.SigDER, cl.SigDER) {
+			return nil
+		}
+		return errors.New("reject: duplicate/conflicting list for validator+epoch")
+	}
+
+	m[cl.ValidatorID] = cl
 	return nil
 }
 
@@ -197,7 +246,7 @@ func (e *Engine) loop(ctx context.Context) {
 		peerLists := e.getPeerLists(epoch)
 
 		// Model B: Merge union of all valid txs; vote only within conflicts.
-		totalValidators := 1 + len(e.cfg.Peers)
+		totalValidators := len(e.cfg.ValidatorSet)
 		threshold := (totalValidators*e.cfg.QuorumPercent + 99) / 100 // ceil
 		if threshold < 1 {
 			threshold = 1
@@ -388,24 +437,23 @@ func (e *Engine) buildCandidateList(epoch uint64, raws [][]byte, snap *Snapshot)
 
 	listHash := crypto.CandidatesListHash(ids)
 
-	var vid [32]byte
-	copy(vid[:], e.cfg.ValidatorPub)
+	vid := e.cfg.Signer.PublicKeyCompressed()
 
-	sigBytes := crypto.SignCandidates(e.cfg.ValidatorPriv, epoch, vid, listHash)
-	if len(sigBytes) != 64 {
-		// should never happen, but prevents panic
-		return &CandidateList{Epoch: epoch, ValidatorID: vid, ListHash: listHash}, ids
+	digest := crypto.CandidatesDigestP256(epoch, vid, listHash)
+	sigDER, err := e.cfg.Signer.SignDigest(digest)
+	if err != nil {
+		// return unsigned list; peers will reject, but avoids panic
+		sigDER = nil
 	}
-	var sig [64]byte
-	copy(sig[:], sigBytes)
 
 	cl := &CandidateList{
 		Epoch:       epoch,
 		ValidatorID: vid,
 		ListHash:    listHash,
-		Sig:         sig,
+		SigDER:      sigDER,
 		Txs:         txs,
 	}
+
 	return cl, ids
 
 }
@@ -428,7 +476,7 @@ func (e *Engine) broadcastCandidates(epoch uint64, cl *CandidateList) {
 	_, _ = protodelim.MarshalTo(buf, er)
 
 	// 3) signature
-	_, _ = protodelim.MarshalTo(buf, &pb.Sig64{V: cl.Sig[:]})
+	_, _ = protodelim.MarshalTo(buf, &pb.Sig64{V: cl.SigDER})
 
 	// 4) txs (full bodies)
 	for _, raw := range cl.Txs {
@@ -451,10 +499,10 @@ func (e *Engine) broadcastCandidates(epoch uint64, cl *CandidateList) {
 	_ = epoch
 }
 
-func (e *Engine) getPeerLists(epoch uint64) map[string]*CandidateList {
+func (e *Engine) getPeerLists(epoch uint64) map[[33]byte]*CandidateList {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make(map[string]*CandidateList)
+	out := make(map[[33]byte]*CandidateList)
 	if m, ok := e.peerLists[epoch]; ok {
 		for k, v := range m {
 			out[k] = v

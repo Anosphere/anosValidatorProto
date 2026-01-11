@@ -2,14 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,22 +31,53 @@ func main() {
 	port := getenv("PORT", "8080")
 	dbPath := getenv("DB_PATH", "validator.db")
 	peers := splitCSV(getenv("PEERS", "")) // comma-separated base URLs
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	epochMS, _ := strconv.Atoi(getenv("EPOCH_MS", "5000"))
 	if epochMS <= 0 {
 		epochMS = 5000
 	}
 
-	seedHex := strings.TrimSpace(os.Getenv("VALIDATOR_SEED_HEX"))
-	if seedHex == "" {
-		log.Fatal("VALIDATOR_SEED_HEX is required (32-byte hex)")
-	}
-	seed, err := hex.DecodeString(seedHex)
-	if err != nil || len(seed) != 32 {
-		log.Fatal("VALIDATOR_SEED_HEX is required (32-byte hex)")
+	kmsKey := strings.TrimSpace(os.Getenv("KMS_KEY_NAME"))
+
+	var signer core.ValidatorSigner
+	var selfID [33]byte
+
+	if kmsKey != "" {
+		kmsSigner, err := core.NewKMSSigner(ctx, kmsKey)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer kmsSigner.Close()
+		signer = kmsSigner
+		selfID = kmsSigner.PublicKeyCompressed()
+	} else {
+		privHex := strings.TrimSpace(os.Getenv("VALIDATOR_ECDSA_PRIV"))
+		if privHex == "" {
+			log.Fatal("VALIDATOR_ECDSA_PRIV is required (32-byte hex scalar D) when KMS_KEY_NAME is not set")
+		}
+		privECDSA, err := crypto.LoadP256PrivateKeyFromHex(privHex)
+		if err != nil {
+			log.Fatalf("VALIDATOR_ECDSA_PRIV invalid: %v", err)
+		}
+		selfID = crypto.CompressP256PublicKey(&privECDSA.PublicKey)
+		signer = core.NewLocalP256Signer(privECDSA)
 	}
 
-	pub, priv := crypto.ValidatorKeypairFromSeed(seed)
+	fmt.Println("Validator Public Key:", hex.EncodeToString(selfID[:]))
+
+	setCSV := strings.TrimSpace(os.Getenv("VALIDATOR_SET_PUBKEYS"))
+	if setCSV == "" {
+		log.Fatal("VALIDATOR_SET_PUBKEYS is required (csv of 33-byte compressed pubkeys hex)")
+	}
+	validatorSet, err := crypto.ParseValidatorSetCSV(setCSV)
+	if err != nil {
+		log.Fatalf("VALIDATOR_SET_PUBKEYS invalid: %v", err)
+	}
+	if _, ok := validatorSet[selfID]; !ok {
+		log.Fatal("validator set does not include this validator's public key")
+	}
 
 	fundHex := strings.TrimSpace(os.Getenv("FUND_ACCOUNT_HEX"))
 	if fundHex == "" {
@@ -64,18 +98,18 @@ func main() {
 
 	engine, err := core.NewEngine(core.EngineConfig{
 		DB:            db,
-		ValidatorPriv: priv,
-		ValidatorPub:  pub,
+		Signer:        signer,
+		ValidatorSet:  validatorSet,
 		Peers:         peers,
 		EpochDuration: time.Duration(epochMS) * time.Millisecond,
 		QuorumPercent: 80,
 		FundAccount:   fundAcct,
 	})
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	engine.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -116,7 +150,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
-		_ = writeProto(w, &pb.Pub32{V: pub})
+		_ = writeProto(w, &pb.Pub32{V: selfID[:]})
 	})
 
 	// POST /peer/candidates
@@ -138,7 +172,7 @@ func main() {
 			http.Error(w, "bad proto (validator_id)", 400)
 			return
 		}
-		if len(vid.V) != 32 {
+		if len(vid.V) != 33 {
 			http.Error(w, "bad validator_id length", 400)
 			return
 		}
@@ -154,7 +188,8 @@ func main() {
 			http.Error(w, "bad proto (sig)", 400)
 			return
 		}
-		if len(sig.V) != 64 {
+		// DER signature is variable length; sanity check only
+		if len(sig.V) < 64 || len(sig.V) > 80 {
 			http.Error(w, "bad sig length", 400)
 			return
 		}
@@ -187,14 +222,13 @@ func main() {
 			txids = append(txids, id)
 		}
 
+		sort.Slice(txids, func(i, j int) bool { return bytes.Compare(txids[i][:], txids[j][:]) < 0 })
 		listHash := crypto.CandidatesListHash(txids)
 
-		var vid32 [32]byte
-		copy(vid32[:], vid.V)
+		var vid33 [33]byte
+		copy(vid33[:], vid.V)
 		var lh32 [32]byte
 		copy(lh32[:], listHash[:])
-		var sig64 [64]byte
-		copy(sig64[:], sig.V)
 
 		// Optional cross-check against sender-provided list hash (carried in EpochRecord.state_root)
 		if er.StateRoot != nil && len(er.StateRoot.V) == 32 {
@@ -206,9 +240,9 @@ func main() {
 
 		cl := &core.CandidateList{
 			Epoch:       er.Epoch,
-			ValidatorID: vid32,
+			ValidatorID: vid33,
 			ListHash:    lh32,
-			Sig:         sig64,
+			SigDER:      append([]byte(nil), sig.V...),
 			Txs:         raws,
 		}
 
@@ -355,7 +389,10 @@ func main() {
 	<-ch
 	cancel()
 
-	_ = srv.Shutdown(context.Background())
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelShutdown()
+	_ = srv.Shutdown(shutdownCtx)
+
 }
 
 func writeProtoResponse(w http.ResponseWriter, msg proto.Message) {
