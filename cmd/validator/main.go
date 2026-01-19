@@ -39,6 +39,11 @@ func main() {
 		epochMS = 5000
 	}
 
+	genesisMs, _ := strconv.ParseInt(getenv("GENESIS_UNIX_MS", "0"), 10, 64)
+	if genesisMs == 0 {
+		log.Fatal("GENESIS_UNIX_MS is required (milliseconds since unix epoch); must be identical on all validators")
+	}
+
 	kmsKey := strings.TrimSpace(os.Getenv("KMS_KEY_NAME"))
 
 	var signer core.ValidatorSigner
@@ -101,6 +106,7 @@ func main() {
 		Signer:        signer,
 		ValidatorSet:  validatorSet,
 		Peers:         peers,
+		GenesisUnixMs: genesisMs,
 		EpochDuration: time.Duration(epochMS) * time.Millisecond,
 		QuorumPercent: 80,
 		FundAccount:   fundAcct,
@@ -164,6 +170,8 @@ func main() {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
+
+		fmt.Printf("Peer/candidates hit\n")
 
 		br := bufio.NewReader(r.Body)
 

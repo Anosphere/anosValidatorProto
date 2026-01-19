@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -24,8 +26,11 @@ type EngineConfig struct {
 	Signer       ValidatorSigner
 	ValidatorSet map[[33]byte]*ecdsa.PublicKey // validator_id -> pubkey (membership)
 
-	Peers          []string
-	EpochDuration  time.Duration
+	Peers         []string
+	EpochDuration time.Duration
+	// GenesisUnixMs anchors epoch numbering to wall-clock time:
+	// epoch = floor((nowMs - genesisMs) / epochMs) + 1
+	GenesisUnixMs  int64
 	QuorumPercent  int // used only for conflict resolution
 	HTTPClient     *http.Client
 	CandidatesSkew time.Duration
@@ -69,6 +74,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	if cfg.EpochDuration <= 0 {
 		cfg.EpochDuration = 5 * time.Second
 	}
+	if cfg.GenesisUnixMs == 0 {
+		return nil, errors.New("missing genesis time: set GENESIS_UNIX_MS (milliseconds since unix epoch)")
+	}
+
 	if cfg.QuorumPercent == 0 {
 		cfg.QuorumPercent = 80
 	}
@@ -215,18 +224,48 @@ func (e *Engine) ReceiveCandidateList(fromURL string, cl *CandidateList) error {
 
 // loop runs epochs.
 func (e *Engine) loop(ctx context.Context) {
-	ticker := time.NewTicker(e.cfg.EpochDuration)
-	defer ticker.Stop()
+	epochMs := e.cfg.EpochDuration.Milliseconds()
+	if epochMs <= 0 {
+		epochMs = 5000
+	}
 
-	var epoch uint64 = 1
+	genesisMs := e.cfg.GenesisUnixMs
 
 	for {
+		// If genesis is in the future, wait until it begins.
+		nowMs := time.Now().UnixMilli()
+		if nowMs < genesisMs {
+			wait := time.Duration(genesisMs-nowMs) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			continue
+		}
+
+		// Determine the current wall-clock epoch window.
+		epoch := uint64((nowMs-genesisMs)/epochMs) + 1
+		epochEndMs := genesisMs + int64(epoch)*epochMs
+
+		// Snapshot at the *start* of the epoch window (best-effort).
 		epochSnap, _ := e.buildSnapshot()
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+		// Sleep until the epoch boundary (end of this epoch).
+		sleepMs := epochEndMs - nowMs
+		if sleepMs > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(sleepMs) * time.Millisecond):
+			}
+		} else {
+			// We're already past the boundary (GC pause / scheduling / etc). Continue immediately.
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 
 		// Close: build our candidate list from txs received during this epoch window.
@@ -244,6 +283,27 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		peerLists := e.getPeerLists(epoch)
+
+		// --- Presence quorum gate (liveness) ---
+		// "All validators" here means: self + everyone in our configured Peers list.
+		// If fewer than 60% are present this epoch, we skip applying anything and retry next epoch.
+		expected := 1 + len(e.cfg.Peers)     // self + peers we expect
+		present := 1 + len(peerLists)        // self + peers we actually received candidate lists from
+		required := (expected*60 + 99) / 100 // ceil(expected * 0.60)
+		if required < 1 {
+			required = 1
+		}
+
+		if present < required {
+			log.Printf("epoch %d skipped: presence %d/%d (<60%%); will retry next epoch", epoch, present, expected)
+
+			// Keep local txs so our candidate list can be rebuilt next epoch.
+			e.requeueMempool(localRaw)
+
+			epoch++
+			continue
+		}
+		// --- end presence quorum gate ---
 
 		// Model B: Merge union of all valid txs; vote only within conflicts.
 		totalValidators := len(e.cfg.ValidatorSet)
@@ -351,7 +411,9 @@ func (e *Engine) loop(ctx context.Context) {
 
 		_ = e.applyWinners(winners, txBytesByID, validParsed)
 
-		epoch++
+		fmt.Printf("epoch done\n")
+
+		// NOTE: no epoch++ anymore. Epoch is derived from wall clock each loop.
 	}
 }
 
@@ -403,6 +465,21 @@ func (e *Engine) drainMempool() [][]byte {
 	out := e.mempool
 	e.mempool = make([][]byte, 0, 1024)
 	return out
+}
+
+func (e *Engine) requeueMempool(raws [][]byte) {
+	if len(raws) == 0 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Prepend, so txs that were already seen get retried first.
+	rebuilt := make([][]byte, 0, len(raws))
+	for _, r := range raws {
+		rebuilt = append(rebuilt, append([]byte(nil), r...))
+	}
+	e.mempool = append(rebuilt, e.mempool...)
 }
 
 // buildCandidateList includes ALL valid txs seen during epoch (even conflicting), per Model B.
