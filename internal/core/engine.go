@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -55,6 +54,12 @@ type CandidateList struct {
 	ListHash    [32]byte
 	SigDER      []byte   // ASN.1 DER ECDSA signature
 	Txs         [][]byte // raw protobuf-encoded pb.Tx messages
+}
+
+// For consistent logging
+func (e *Engine) elog(epoch uint64, format string, args ...any) {
+	prefix := append([]any{epoch}, args...)
+	log.Printf("[epoch=%d] "+format, prefix...)
 }
 
 func NewEngine(cfg EngineConfig) (*Engine, error) {
@@ -248,6 +253,9 @@ func (e *Engine) loop(ctx context.Context) {
 		epoch := uint64((nowMs-genesisMs)/epochMs) + 1
 		epochEndMs := genesisMs + int64(epoch)*epochMs
 
+		start := time.Now()
+		e.elog(epoch, " ----- Starting New Epoch ----- ")
+
 		// Snapshot at the *start* of the epoch window (best-effort).
 		epochSnap, _ := e.buildSnapshot()
 
@@ -272,8 +280,12 @@ func (e *Engine) loop(ctx context.Context) {
 		localRaw := e.drainMempool()
 		selfList, _ := e.buildCandidateList(epoch, localRaw, epochSnap)
 
+		e.elog(epoch, "local candidates built (mempool=%d)", len(localRaw))
+
 		// Broadcast once at epoch close
 		e.broadcastCandidates(epoch, selfList)
+
+		e.elog(epoch, "broadcast candidates to %d peers", len(e.cfg.Peers))
 
 		// Wait a small skew for peers to arrive
 		select {
@@ -283,6 +295,8 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		peerLists := e.getPeerLists(epoch)
+
+		e.elog(epoch, "peer lists received=%d", len(peerLists))
 
 		// --- Presence quorum gate (liveness) ---
 		// "All validators" here means: self + everyone in our configured Peers list.
@@ -409,11 +423,16 @@ func (e *Engine) loop(ctx context.Context) {
 			winners[k.acct] = eligible[0].id
 		}
 
-		_ = e.applyWinners(winners, txBytesByID, validParsed)
-
-		fmt.Printf("epoch done\n")
-
-		// NOTE: no epoch++ anymore. Epoch is derived from wall clock each loop.
+		e.elog(epoch, "apply begin (winner_accounts=%d, candidate_txs=%d)", len(winners), len(validParsed))
+		if err := e.applyWinners(winners, txBytesByID, validParsed); err != nil {
+			e.elog(epoch, "ERROR: apply failed: %v", err)
+			// Optional: requeue localRaw so you don't lose txs on apply failure
+			// e.requeueMempool(localRaw)
+			// Depending on your preference, continue or return:
+			// continue
+		} else {
+			e.elog(epoch, "COMMIT OK (elapsed=%s)", time.Since(start).Truncate(time.Millisecond))
+		}
 	}
 }
 

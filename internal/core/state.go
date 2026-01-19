@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"sort"
 
 	"go.etcd.io/bbolt"
 )
@@ -99,3 +100,56 @@ func hasReceivable(tx *bbolt.Tx, rid [32]byte) bool {
 }
 
 func bytesEq32(a []byte, b [32]byte) bool { return len(a) == 32 && bytes.Equal(a, b[:]) }
+
+type AccountHeadRow struct {
+	Account [32]byte
+	Head    [32]byte
+	Balance uint64
+	Seq     uint64
+}
+
+// ListAllAccountHeads reads the current heads for all accounts from the DB.
+// It returns one row per account in the BAccounts bucket.
+func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
+	var out []AccountHeadRow
+
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(BAccounts)
+		if b == nil {
+			// If buckets weren’t created yet, treat as empty.
+			return nil
+		}
+
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if len(k) != 32 {
+				continue
+			}
+			head, bal, seq, ok := unpackAccount(v)
+			if !ok {
+				continue
+			}
+
+			var acct [32]byte
+			copy(acct[:], k)
+
+			out = append(out, AccountHeadRow{
+				Account: acct,
+				Head:    head,
+				Balance: bal,
+				Seq:     seq,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Stable ordering (helpful for debugging / diffing)
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].Account[:], out[j].Account[:]) < 0
+	})
+
+	return out, nil
+}

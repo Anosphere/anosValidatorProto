@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -170,8 +171,6 @@ func main() {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-
-		fmt.Printf("Peer/candidates hit\n")
 
 		br := bufio.NewReader(r.Body)
 
@@ -381,6 +380,43 @@ func main() {
 		resp.Receivables = recs
 		resp.Ok = true
 		writeProtoResponse(w, resp)
+	})
+
+	// ---- Debug/DB endpoints (JSON) ----
+
+	// GET /debug/accounts/heads
+	// Returns all account heads currently stored in bbolt.
+	mux.HandleFunc("/debug/accounts/heads", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		rows, err := core.ListAllAccountHeads(db)
+		if err != nil {
+			http.Error(w, "db error: "+err.Error(), 500)
+			return
+		}
+
+		type rowJSON struct {
+			Account string `json:"account"`
+			Head    string `json:"head"`
+			Balance uint64 `json:"balance"`
+			Seq     uint64 `json:"seq"`
+		}
+
+		out := make([]rowJSON, 0, len(rows))
+		for _, rr := range rows {
+			out = append(out, rowJSON{
+				Account: hex.EncodeToString(rr.Account[:]),
+				Head:    hex.EncodeToString(rr.Head[:]),
+				Balance: rr.Balance,
+				Seq:     rr.Seq,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
 	})
 
 	srv := &http.Server{Addr: ":" + port, Handler: mux}
