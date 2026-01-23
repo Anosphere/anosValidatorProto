@@ -20,11 +20,6 @@ import (
 )
 
 func main() {
-	baseURL := getenv("BASE_URL", "http://127.0.0.1:8080")
-
-	epochMS := getenvInt("EPOCH_MS", 5000)
-	pollEvery := 200 * time.Millisecond
-	maxWait := 30 * time.Second
 
 	// Generate Alice/Bob keys (AccountId == pubkey bytes)
 	alPub, alPriv := mustKeypair()
@@ -32,75 +27,14 @@ func main() {
 	alHex := hex.EncodeToString(alPub)
 	boHex := hex.EncodeToString(boPub)
 
-	fmt.Println("Alice:", alHex)
-	fmt.Println("Bob  :", boHex)
+	fmt.Println("Alice Pub:", alHex)
+	fmt.Println("Bob Pub :", boHex)
 
-	// Fund Alice (dev/admin). With start-of-epoch snapshot, wait one epoch so next snapshot includes faucet.
-	mustPOST(baseURL + "/faucet?acct=" + alHex + "&amount=10000000")
+	alPrivHex := hex.EncodeToString(alPriv)
+	boPrivHex := hex.EncodeToString(boPriv)
 
-	time.Sleep(time.Duration(epochMS)*time.Millisecond + 300*time.Millisecond)
-
-	// Fetch Alice state
-	alState := mustGetAccount(baseURL, alPub)
-
-	// Set Amount to Send
-	amount := uint64(1 * core.UnitsPerAnos)
-
-	// Calculate Fee
-	fee := core.ExpectedFee(amount)
-
-	// Build SEND tx from Alice to Bob
-	send := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_SEND,
-		Account: &pb.AccountId{V: alPub},
-		Prev:    &pb.Hash32{V: alState.Head.GetV()},
-		Seq:     alState.Seq + 1,
-		Body: &pb.Tx_Send{Send: &pb.TxBodySend{
-			To:     &pb.AccountId{V: boPub},
-			Amount: amount,
-			Fee:    fee,
-			// ReceivableId may be set after txid derivation, but is NOT part of signing bytes for SEND.
-		}},
-	}
-	signTx(send, alPriv)
-
-	// Derive txid + expected receivable_id (for display; validators compute)
-	txid, _ := crypto.TxID(send)
-	rid := crypto.ReceivableIDFromTxID(txid)
-	// Client MAY set it (validators require match). Optional:
-	send.GetSend().ReceivableId = &pb.Hash32{V: rid[:]}
-
-	mustSubmit(baseURL, send)
-
-	fmt.Println("Sent txid:", hex.EncodeToString(txid[:]))
-	fmt.Println("Receivable:", hex.EncodeToString(rid[:]))
-
-	// Poll until Bob sees the receivable (meaning SEND committed at epoch close)
-	targetRID := waitForReceivable(baseURL, boPub, rid[:], pollEvery, maxWait)
-	fmt.Println("Bob receivable id:", hex.EncodeToString(targetRID))
-
-	// Fetch Bob state
-	boState := mustGetAccount(baseURL, boPub)
-
-	recv := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_RECEIVE,
-		Account: &pb.AccountId{V: boPub},
-		Prev:    &pb.Hash32{V: boState.Head.GetV()},
-		Seq:     boState.Seq + 1,
-		Body: &pb.Tx_Receive{Receive: &pb.TxBodyReceive{
-			ReceivableId: &pb.Hash32{V: targetRID},
-		}},
-	}
-	signTx(recv, boPriv)
-	mustSubmit(baseURL, recv)
-
-	// Wait until Bob seq increments (RECEIVE committed)
-	waitForSeqAtLeast(baseURL, boPub, boState.Seq+1, pollEvery, maxWait)
-
-	// Print final states
-	_ = mustGetAccount(baseURL, alPub)
-	_ = mustGetAccount(baseURL, boPub)
-	fmt.Println("Done.")
+	fmt.Println("Alice Priv:", alPrivHex)
+	fmt.Println("Bob Priv :", boPrivHex)
 }
 
 func signTx(tx *pb.Tx, priv ed25519.PrivateKey) {

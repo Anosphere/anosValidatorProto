@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"sort"
@@ -10,10 +11,12 @@ import (
 )
 
 var (
-	BMeta     = []byte("meta")     // key: "current_epoch" -> u64 BE (optional)
-	BAccounts = []byte("accounts") // key: acct(32) -> head(32) || balance(u64 BE) || seq(u64 BE)
-	BTxs      = []byte("txs")      // key: txid(32) -> raw protobuf tx bytes
-	BRecv     = []byte("recv")     // key: receivable_id(32) -> raw protobuf receivable bytes
+	BMeta           = []byte("meta")            // key: "current_epoch" -> u64 BE (optional)
+	BAccounts       = []byte("accounts")        // key: acct(32) -> head(32) || balance(u64 BE) || seq(u64 BE)
+	BTxs            = []byte("txs")             // key: txid(32) -> raw protobuf tx bytes
+	BRecv           = []byte("recv")            // key: receivable_id(32) -> raw protobuf receivable bytes
+	BEpochFrontiers = []byte("epoch_frontiers") // key: epoch(8)||acct(32) -> head(32)
+	BFinalizations  = []byte("finalizations")   // key: epoch(8)||validator_id(33) -> raw proto EpochFinalization
 )
 
 var (
@@ -21,7 +24,7 @@ var (
 )
 
 func ensureBuckets(tx *bbolt.Tx) error {
-	for _, b := range [][]byte{BMeta, BAccounts, BTxs, BRecv} {
+	for _, b := range [][]byte{BMeta, BAccounts, BTxs, BRecv, BEpochFrontiers, BFinalizations} {
 		if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 			return err
 		}
@@ -151,5 +154,180 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 		return bytes.Compare(out[i].Account[:], out[j].Account[:]) < 0
 	})
 
+	return out, nil
+}
+
+// --- Finalizations ---
+
+func finalKey(epoch uint64, validatorID [33]byte) []byte {
+	k := make([]byte, 8+33)
+	binary.BigEndian.PutUint64(k[:8], epoch)
+	copy(k[8:], validatorID[:])
+	return k
+}
+
+func PutFinalization(tx *bbolt.Tx, epoch uint64, validatorID [33]byte, raw []byte) error {
+	return tx.Bucket(BFinalizations).Put(finalKey(epoch, validatorID), raw)
+}
+
+func GetFinalizations(db *bbolt.DB, epoch uint64) ([][]byte, error) {
+	var out [][]byte
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(BFinalizations)
+		if b == nil {
+			return ErrNotFound
+		}
+		prefix := make([]byte, 8)
+		binary.BigEndian.PutUint64(prefix, epoch)
+
+		c := b.Cursor()
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			out = append(out, append([]byte(nil), v...))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrNotFound
+	}
+	return out, nil
+}
+
+// --- Epoch frontiers (acct->head snapshot after apply) ---
+
+func epochFrontierKey(epoch uint64, acct [32]byte) []byte {
+	k := make([]byte, 8+32)
+	binary.BigEndian.PutUint64(k[:8], epoch)
+	copy(k[8:], acct[:])
+	return k
+}
+
+// SaveEpochFrontiers snapshots the current BAccounts heads into BEpochFrontiers for this epoch.
+// Call this immediately after applying winners (post-state).
+func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		if err := ensureBuckets(tx); err != nil {
+			return err
+		}
+		acc := tx.Bucket(BAccounts)
+		out := tx.Bucket(BEpochFrontiers)
+
+		c := acc.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if len(k) != 32 {
+				continue
+			}
+			head, _, _, ok := unpackAccount(v)
+			if !ok {
+				continue
+			}
+			var acct [32]byte
+			copy(acct[:], k)
+			if err := out.Put(epochFrontierKey(epoch, acct), head[:]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+type FrontierEntry struct {
+	AccountID [32]byte
+	HeadHash  [32]byte
+}
+
+func IterEpochFrontiers(db *bbolt.DB, epoch uint64, cursor [32]byte, limit int) ([]FrontierEntry, *[32]byte, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	var entries []FrontierEntry
+	var next *[32]byte
+
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(BEpochFrontiers)
+		if b == nil {
+			return ErrNotFound
+		}
+		prefix := make([]byte, 8)
+		binary.BigEndian.PutUint64(prefix, epoch)
+
+		seek := prefix
+		if cursor != ([32]byte{}) {
+			seek = epochFrontierKey(epoch, cursor)
+		}
+
+		c := b.Cursor()
+		for k, v := c.Seek(seek); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			if len(k) != 8+32 || len(v) != 32 {
+				continue
+			}
+			var acct [32]byte
+			copy(acct[:], k[8:40])
+			var head [32]byte
+			copy(head[:], v)
+
+			entries = append(entries, FrontierEntry{AccountID: acct, HeadHash: head})
+			if len(entries) >= limit {
+				// next cursor is the next account id (if any)
+				nk, _ := c.Next()
+				if nk != nil && bytes.HasPrefix(nk, prefix) && len(nk) >= 40 {
+					var nc [32]byte
+					copy(nc[:], nk[8:40])
+					next = &nc
+				}
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return entries, next, nil
+}
+
+// ComputeFrontiersRoot computes SHA256 of concat(sorted(account||head)) for epoch frontiers.
+func ComputeFrontiersRoot(db *bbolt.DB, epoch uint64) ([32]byte, error) {
+	var rows []FrontierEntry
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(BEpochFrontiers)
+		if b == nil {
+			return ErrNotFound
+		}
+		prefix := make([]byte, 8)
+		binary.BigEndian.PutUint64(prefix, epoch)
+
+		c := b.Cursor()
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			if len(k) != 8+32 || len(v) != 32 {
+				continue
+			}
+			var acct [32]byte
+			copy(acct[:], k[8:40])
+			var head [32]byte
+			copy(head[:], v)
+			rows = append(rows, FrontierEntry{AccountID: acct, HeadHash: head})
+		}
+		return nil
+	})
+	if err != nil {
+		return [32]byte{}, err
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return bytes.Compare(rows[i].AccountID[:], rows[j].AccountID[:]) < 0
+	})
+
+	h := sha256.New()
+	var buf [64]byte
+	for _, r := range rows {
+		copy(buf[:32], r.AccountID[:])
+		copy(buf[32:], r.HeadHash[:])
+		_, _ = h.Write(buf[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
 	return out, nil
 }

@@ -141,3 +141,102 @@ message ListReceivablesResponse {
   repeated Receivable receivables = 2;
   ApiError error = 3;
 }
+
+
+// ------------------------------------------------------------
+// Validator-only protocol (safe to change; not used by wallets)
+// ------------------------------------------------------------
+
+// Your code currently uses Sig64 to carry DER P-256 signatures (variable length).
+// Keep compatibility but add an explicit type for clarity going forward.
+message SigDER { bytes v = 1; } // DER-encoded ECDSA signature (variable length)
+
+// --- Tx gossip (INV -> WANT -> PUSH) ---
+
+message TxInv {
+  uint64 epoch = 1;        // sender's current epoch (informational)
+  Pub32  from = 2;         // validator_id (your code uses Pub32 but expects 33 bytes)
+  repeated Hash32 txid = 3;
+}
+
+message TxWant {
+  uint64 epoch = 1;
+  Pub32  from = 2;
+  repeated Hash32 txid = 3; // which txids receiver wants bytes for
+}
+
+message TxPush {
+  uint64 epoch = 1;
+  Pub32  from = 2;
+  repeated Tx tx = 3;       // full Tx objects (protobuf)
+  // (Alternative is repeated bytes tx_bytes, but using Tx avoids extra marshal steps.)
+}
+
+// --- Candidate list v2 (txids only; votes) ---
+// list_hash = SHA256(concat(sorted txid bytes))
+message CandidateListV2 {
+  uint64 epoch = 1;
+  Pub32 proposer = 2;            // validator_id
+  repeated Hash32 txid = 3;      // txids only (sorted by sender)
+
+  Hash32 list_hash = 4;
+  SigDER sig = 5;                // signature over digest(epoch, proposer, list_hash)
+}
+
+// --- Epoch finalization (checkpoint anchor for resync) ---
+// accepted_txids_hash = SHA256(concat(sorted accepted txid bytes))
+// frontiers_root      = SHA256(concat(sorted (account_id||head_hash) bytes)) for this epoch snapshot
+message EpochFinalization {
+  uint64 epoch = 1;
+
+  Hash32 accepted_txids_hash = 2;
+  Hash32 frontiers_root = 3;
+
+  Pub32 signer = 4;   // validator_id
+  SigDER sig = 5;     // signature over digest(epoch, accepted_txids_hash, frontiers_root)
+}
+
+// --- Resync / bootstrap (Nano-style) ---
+
+message SyncLatestRequest {}
+
+message SyncLatestResponse {
+  uint64 latest_epoch = 1;
+}
+
+message SyncFinalizationRequest {
+  uint64 epoch = 1;
+}
+
+message SyncFinalizationResponse {
+  repeated EpochFinalization finalizations = 1;
+}
+
+message FrontierEntry {
+  AccountId account = 1; // 32 bytes
+  Hash32 head = 2;       // 32 bytes
+}
+
+message SyncFrontiersRequest {
+  uint64 epoch = 1;
+  AccountId cursor = 2;  // optional; empty means start
+  uint32 limit = 3;
+}
+
+message SyncFrontiersResponse {
+  uint64 epoch = 1;
+  repeated FrontierEntry entries = 2;
+  AccountId next_cursor = 3; // empty when done
+}
+
+message SyncChainRequest {
+  AccountId account = 1;
+  Hash32 target_head = 2;
+  Hash32 have = 3;        // optional; empty means "no have"
+  uint32 max_blocks = 4;
+}
+
+message SyncChainResponse {
+  repeated Tx tx = 1;     // from target head backwards (head-first order)
+  bool reached_have = 2;
+}
