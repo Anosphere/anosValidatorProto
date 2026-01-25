@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -103,14 +101,16 @@ func main() {
 	defer db.Close()
 
 	engine, err := core.NewEngine(core.EngineConfig{
-		DB:            db,
-		Signer:        signer,
-		ValidatorSet:  validatorSet,
-		Peers:         peers,
-		GenesisUnixMs: genesisMs,
-		EpochDuration: time.Duration(epochMS) * time.Millisecond,
-		QuorumPercent: 80,
-		FundAccount:   fundAcct,
+		DB:                        db,
+		Signer:                    signer,
+		ValidatorSet:              validatorSet,
+		Peers:                     peers,
+		GenesisUnixMs:             genesisMs,
+		EpochDuration:             time.Duration(epochMS) * time.Millisecond,
+		QuorumPercent:             80,
+		FinalizationQuorumPercent: 60,
+		FinalizationSkew:          800 * time.Millisecond,
+		FundAccount:               fundAcct,
 	})
 
 	if err != nil {
@@ -171,99 +171,303 @@ func main() {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
 		}
-
-		br := bufio.NewReader(r.Body)
-
-		var vid pb.Pub32
-		if err := protodelim.UnmarshalFrom(br, &vid); err != nil {
-			http.Error(w, "bad proto (validator_id)", 400)
+		var cl pb.CandidateListV2
+		if err := readProto(r.Body, &cl); err != nil {
+			http.Error(w, "bad proto", 400)
 			return
 		}
-		if len(vid.V) != 33 {
-			http.Error(w, "bad validator_id length", 400)
+		if cl.Proposer == nil || len(cl.Proposer.V) != 33 {
+			http.Error(w, "bad proposer", 400)
 			return
 		}
-
-		var er pb.EpochRecord
-		if err := protodelim.UnmarshalFrom(br, &er); err != nil {
-			http.Error(w, "bad proto (epoch)", 400)
+		if cl.ListHash == nil || len(cl.ListHash.V) != 32 {
+			http.Error(w, "bad list_hash", 400)
 			return
 		}
-
-		var sig pb.Sig64
-		if err := protodelim.UnmarshalFrom(br, &sig); err != nil {
-			http.Error(w, "bad proto (sig)", 400)
-			return
-		}
-		// DER signature is variable length; sanity check only
-		if len(sig.V) < 64 || len(sig.V) > 80 {
-			http.Error(w, "bad sig length", 400)
+		if cl.Sig == nil || len(cl.Sig.V) < 64 || len(cl.Sig.V) > 80 {
+			http.Error(w, "bad sig", 400)
 			return
 		}
 
-		// Read remaining Tx messages
-		var raws [][]byte
-		var txids [][32]byte
-		for {
-			var tx pb.Tx
-			err := protodelim.UnmarshalFrom(br, &tx)
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				http.Error(w, "bad proto (tx stream)", 400)
-				return
-			}
+		var vid [33]byte
+		copy(vid[:], cl.Proposer.V)
+		var lh [32]byte
+		copy(lh[:], cl.ListHash.V)
 
-			// Marshal each tx back to bytes for Engine CandidateList.Txs
-			raw, err := proto.Marshal(&tx)
-			if err != nil {
+		txids := make([][32]byte, 0, len(cl.Txid))
+		for _, h := range cl.Txid {
+			if h == nil || len(h.V) != 32 {
 				continue
 			}
-			id, err := crypto.TxID(&tx)
-			if err != nil {
-				continue
-			}
-
-			raws = append(raws, raw)
+			var id [32]byte
+			copy(id[:], h.V)
 			txids = append(txids, id)
 		}
 
-		sort.Slice(txids, func(i, j int) bool { return bytes.Compare(txids[i][:], txids[j][:]) < 0 })
-		listHash := crypto.CandidatesListHash(txids)
-
-		var vid33 [33]byte
-		copy(vid33[:], vid.V)
-		var lh32 [32]byte
-		copy(lh32[:], listHash[:])
-
-		// Optional cross-check against sender-provided list hash (carried in EpochRecord.state_root)
-		if er.StateRoot != nil && len(er.StateRoot.V) == 32 {
-			if !bytesEq(er.StateRoot.V, listHash[:]) {
-				http.Error(w, "reject: list_hash mismatch", 400)
-				return
-			}
-		}
-
-		cl := &core.CandidateList{
-			Epoch:       er.Epoch,
-			ValidatorID: vid33,
-			ListHash:    lh32,
-			SigDER:      append([]byte(nil), sig.V...),
-			Txs:         raws,
+		c := &core.CandidateList{
+			Epoch:       cl.Epoch,
+			ValidatorID: vid,
+			ListHash:    lh,
+			SigDER:      append([]byte(nil), cl.Sig.V...),
+			TxIDs:       txids,
 		}
 
 		from := r.Header.Get("X-Validator-URL")
 		if from == "" {
-			// For local dev this is fine. For production, prefer X-Validator-URL.
 			from = r.RemoteAddr
 		}
-
-		if err := engine.ReceiveCandidateList(from, cl); err != nil {
+		if err := engine.ReceiveCandidateList(from, c); err != nil {
 			http.Error(w, "reject: "+err.Error(), 400)
 			return
 		}
 		w.WriteHeader(200)
+	})
+
+	mux.HandleFunc("/peer/finalization", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var fin pb.EpochFinalization
+		if err := readProto(r.Body, &fin); err != nil {
+			http.Error(w, "bad proto", 400)
+			return
+		}
+		if fin.Signer == nil || len(fin.Signer.V) != 33 {
+			http.Error(w, "bad signer", 400)
+			return
+		}
+		if fin.AcceptedTxidsHash == nil || len(fin.AcceptedTxidsHash.V) != 32 {
+			http.Error(w, "bad accepted hash", 400)
+			return
+		}
+		if fin.FrontiersRoot == nil || len(fin.FrontiersRoot.V) != 32 {
+			http.Error(w, "bad frontiers root", 400)
+			return
+		}
+		if fin.Sig == nil || len(fin.Sig.V) < 64 || len(fin.Sig.V) > 80 {
+			http.Error(w, "bad sig", 400)
+			return
+		}
+
+		if err := engine.ReceiveFinalization(&fin); err != nil {
+			http.Error(w, "reject: "+err.Error(), 400)
+			return
+		}
+		w.WriteHeader(200)
+	})
+
+	mux.HandleFunc("/peer/tx/inv", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var inv pb.TxInv
+		if err := readProto(r.Body, &inv); err != nil {
+			http.Error(w, "bad proto", 400)
+			return
+		}
+		if inv.From == nil || len(inv.From.V) != 33 {
+			http.Error(w, "bad from", 400)
+			return
+		}
+		var fromID [33]byte
+		copy(fromID[:], inv.From.V)
+
+		// membership check (same as candidates)
+		if engine.ValidatorPub(fromID) == nil {
+			http.Error(w, "unknown validator", 400)
+			return
+		}
+
+		want := &pb.TxWant{
+			Epoch: inv.Epoch,
+			From:  &pb.Pub32{V: inv.From.V},
+		}
+
+		for _, h := range inv.Txid {
+			if h == nil || len(h.V) != 32 {
+				continue
+			}
+			var txid [32]byte
+			copy(txid[:], h.V)
+			if !engine.HasTx(txid) {
+				want.Txid = append(want.Txid, &pb.Hash32{V: h.V})
+			}
+		}
+
+		writeProto(w, want)
+	})
+
+	mux.HandleFunc("/peer/tx/push", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var push pb.TxPush
+		if err := readProto(r.Body, &push); err != nil {
+			http.Error(w, "bad proto", 400)
+			return
+		}
+		if push.From == nil || len(push.From.V) != 33 {
+			http.Error(w, "bad from", 400)
+			return
+		}
+		var fromID [33]byte
+		copy(fromID[:], push.From.V)
+		if engine.ValidatorPub(fromID) == nil {
+			http.Error(w, "unknown validator", 400)
+			return
+		}
+
+		for _, tx := range push.Tx {
+			if tx == nil {
+				continue
+			}
+			raw, err := proto.Marshal(tx)
+			if err != nil {
+				continue
+			}
+			_ = engine.ReceiveGossipedTx(raw)
+		}
+		w.WriteHeader(200)
+	})
+
+	mux.HandleFunc("/peer/tx/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var want pb.TxWant
+		if err := readProto(r.Body, &want); err != nil {
+			http.Error(w, "bad proto", 400)
+			return
+		}
+		out := &pb.TxPush{
+			Epoch: want.Epoch,
+			From:  &pb.Pub32{V: selfID[:]},
+		}
+
+		for _, h := range want.Txid {
+			if h == nil || len(h.V) != 32 {
+				continue
+			}
+			var txid [32]byte
+			copy(txid[:], h.V)
+			raw := engine.GetTxBytes(txid)
+			if len(raw) == 0 {
+				continue
+			}
+			tx, err := core.ParseTx(raw)
+			if err != nil {
+				continue
+			}
+			out.Tx = append(out.Tx, tx)
+		}
+
+		writeProto(w, out)
+	})
+
+	mux.HandleFunc("/sync/latest", func(w http.ResponseWriter, r *http.Request) {
+		latest := engine.LatestFinalizedEpoch()
+		writeProto(w, &pb.SyncLatestResponse{LatestEpoch: latest})
+	})
+
+	mux.HandleFunc("/sync/finalization", func(w http.ResponseWriter, r *http.Request) {
+		epStr := r.URL.Query().Get("epoch")
+		ep, err := strconv.ParseUint(strings.TrimSpace(epStr), 10, 64)
+		if err != nil {
+			http.Error(w, "need ?epoch=<u64>", 400)
+			return
+		}
+		fins, err := core.GetFinalizations(db, ep)
+		if err != nil && !errors.Is(err, core.ErrNotFound) {
+			http.Error(w, "db error", 500)
+			return
+		}
+		resp := &pb.SyncFinalizationResponse{}
+		for _, raw := range fins {
+			var f pb.EpochFinalization
+			if err := proto.Unmarshal(raw, &f); err != nil {
+				continue
+			}
+			resp.Finalizations = append(resp.Finalizations, &f)
+		}
+		writeProto(w, resp)
+	})
+
+	mux.HandleFunc("/sync/frontiers", func(w http.ResponseWriter, r *http.Request) {
+		epStr := r.URL.Query().Get("epoch")
+		ep, err := strconv.ParseUint(strings.TrimSpace(epStr), 10, 64)
+		if err != nil {
+			http.Error(w, "need ?epoch=<u64>", 400)
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 1000
+		}
+		var cursor [32]byte
+		if curHex := r.URL.Query().Get("cursor"); curHex != "" {
+			b, err := hex.DecodeString(curHex)
+			if err == nil && len(b) == 32 {
+				copy(cursor[:], b)
+			}
+		}
+
+		rows, next, err := core.IterEpochFrontiers(db, ep, cursor, limit)
+		if err != nil && !errors.Is(err, core.ErrNotFound) {
+			http.Error(w, "db error", 500)
+			return
+		}
+
+		resp := &pb.SyncFrontiersResponse{Epoch: ep}
+		for _, row := range rows {
+			resp.Entries = append(resp.Entries, &pb.FrontierEntry{
+				Account: &pb.AccountId{V: row.AccountID[:]},
+				Head:    &pb.Hash32{V: row.HeadHash[:]},
+			})
+		}
+		if next != nil {
+			resp.NextCursor = &pb.AccountId{V: next[:]}
+		}
+		writeProto(w, resp)
+	})
+
+	mux.HandleFunc("/sync/chain", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req pb.SyncChainRequest
+		if err := readProto(r.Body, &req); err != nil {
+			http.Error(w, "bad proto", 400)
+			return
+		}
+		if req.Account == nil || len(req.Account.V) != 32 || req.TargetHead == nil || len(req.TargetHead.V) != 32 {
+			http.Error(w, "bad request", 400)
+			return
+		}
+		var acct [32]byte
+		copy(acct[:], req.Account.V)
+		var head [32]byte
+		copy(head[:], req.TargetHead.V)
+
+		var have [32]byte
+		if req.Have != nil && len(req.Have.V) == 32 {
+			copy(have[:], req.Have.V)
+		}
+
+		txs, reached := engine.SyncChain(acct, head, have, int(req.MaxBlocks))
+		resp := &pb.SyncChainResponse{ReachedHave: reached}
+		for _, raw := range txs {
+			tx, err := core.ParseTx(raw)
+			if err != nil {
+				continue
+			}
+			resp.Tx = append(resp.Tx, tx)
+		}
+		writeProto(w, resp)
 	})
 
 	// ---- Public API endpoints (protobuf) ----
@@ -444,21 +648,15 @@ func writeProtoResponse(w http.ResponseWriter, msg proto.Message) {
 	_ = writeProto(w, msg)
 }
 
-func writeProto(w io.Writer, msg proto.Message) error {
-	b, err := proto.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(b)
+func writeProto(w http.ResponseWriter, msg proto.Message) error {
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	_, err := protodelim.MarshalTo(w, msg)
 	return err
 }
 
 func readProto(r io.Reader, msg proto.Message) error {
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	return proto.Unmarshal(b, msg)
+	br := bufio.NewReader(r)
+	return protodelim.UnmarshalFrom(br, msg)
 }
 
 func splitCSV(s string) []string {

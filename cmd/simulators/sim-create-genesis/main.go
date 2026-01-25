@@ -2,6 +2,7 @@ package main
 
 import (
 	"anos/internal/core"
+	"bufio"
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protodelim"
 	"google.golang.org/protobuf/proto"
 
 	"anos/internal/crypto"
@@ -134,11 +136,12 @@ func waitForSeqAtLeast(baseURL string, acct []byte, wantSeq uint64, pollEvery, m
 }
 
 func postProto(url string, req proto.Message, resp proto.Message) error {
-	b, err := proto.Marshal(req)
-	if err != nil {
+	var buf bytes.Buffer
+	if _, err := protodelim.MarshalTo(&buf, req); err != nil {
 		return err
 	}
-	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(b))
+
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(buf.Bytes()))
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 	httpReq.Header.Set("Accept", "application/x-protobuf")
 
@@ -151,7 +154,9 @@ func postProto(url string, req proto.Message, resp proto.Message) error {
 	if httpResp.StatusCode >= 300 {
 		return fmt.Errorf("http %d: %s", httpResp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	return proto.Unmarshal(body, resp)
+
+	br := bufio.NewReader(bytes.NewReader(body))
+	return protodelim.UnmarshalFrom(br, resp)
 }
 
 func mustKeypair() ([]byte, ed25519.PrivateKey) {
