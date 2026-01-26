@@ -1220,6 +1220,849 @@ func (x *ListReceivablesResponse) GetError() *ApiError {
 	return nil
 }
 
+// Your code currently uses Sig64 to carry DER P-256 signatures (variable length).
+// Keep compatibility but add an explicit type for clarity going forward.
+type SigDER struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	V             []byte                 `protobuf:"bytes,1,opt,name=v,proto3" json:"v,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SigDER) Reset() {
+	*x = SigDER{}
+	mi := &file_proto_anos_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SigDER) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SigDER) ProtoMessage() {}
+
+func (x *SigDER) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SigDER.ProtoReflect.Descriptor instead.
+func (*SigDER) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SigDER) GetV() []byte {
+	if x != nil {
+		return x.V
+	}
+	return nil
+}
+
+type TxInv struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"` // sender's current epoch (informational)
+	From          *Pub32                 `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`    // validator_id (your code uses Pub32 but expects 33 bytes)
+	Txid          []*Hash32              `protobuf:"bytes,3,rep,name=txid,proto3" json:"txid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxInv) Reset() {
+	*x = TxInv{}
+	mi := &file_proto_anos_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxInv) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxInv) ProtoMessage() {}
+
+func (x *TxInv) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxInv.ProtoReflect.Descriptor instead.
+func (*TxInv) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *TxInv) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *TxInv) GetFrom() *Pub32 {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *TxInv) GetTxid() []*Hash32 {
+	if x != nil {
+		return x.Txid
+	}
+	return nil
+}
+
+type TxWant struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	From          *Pub32                 `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`
+	Txid          []*Hash32              `protobuf:"bytes,3,rep,name=txid,proto3" json:"txid,omitempty"` // which txids receiver wants bytes for
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxWant) Reset() {
+	*x = TxWant{}
+	mi := &file_proto_anos_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxWant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxWant) ProtoMessage() {}
+
+func (x *TxWant) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxWant.ProtoReflect.Descriptor instead.
+func (*TxWant) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *TxWant) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *TxWant) GetFrom() *Pub32 {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *TxWant) GetTxid() []*Hash32 {
+	if x != nil {
+		return x.Txid
+	}
+	return nil
+}
+
+type TxPush struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	From          *Pub32                 `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`
+	Tx            []*Tx                  `protobuf:"bytes,3,rep,name=tx,proto3" json:"tx,omitempty"` // full Tx objects (protobuf)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxPush) Reset() {
+	*x = TxPush{}
+	mi := &file_proto_anos_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxPush) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxPush) ProtoMessage() {}
+
+func (x *TxPush) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxPush.ProtoReflect.Descriptor instead.
+func (*TxPush) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *TxPush) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *TxPush) GetFrom() *Pub32 {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *TxPush) GetTx() []*Tx {
+	if x != nil {
+		return x.Tx
+	}
+	return nil
+}
+
+// --- Candidate list v2 (txids only; votes) ---
+// list_hash = SHA256(concat(sorted txid bytes))
+type CandidateListV2 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Proposer      *Pub32                 `protobuf:"bytes,2,opt,name=proposer,proto3" json:"proposer,omitempty"` // validator_id
+	Txid          []*Hash32              `protobuf:"bytes,3,rep,name=txid,proto3" json:"txid,omitempty"`         // txids only (sorted by sender)
+	ListHash      *Hash32                `protobuf:"bytes,4,opt,name=list_hash,json=listHash,proto3" json:"list_hash,omitempty"`
+	Sig           *SigDER                `protobuf:"bytes,5,opt,name=sig,proto3" json:"sig,omitempty"` // signature over digest(epoch, proposer, list_hash)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CandidateListV2) Reset() {
+	*x = CandidateListV2{}
+	mi := &file_proto_anos_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CandidateListV2) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CandidateListV2) ProtoMessage() {}
+
+func (x *CandidateListV2) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CandidateListV2.ProtoReflect.Descriptor instead.
+func (*CandidateListV2) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CandidateListV2) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *CandidateListV2) GetProposer() *Pub32 {
+	if x != nil {
+		return x.Proposer
+	}
+	return nil
+}
+
+func (x *CandidateListV2) GetTxid() []*Hash32 {
+	if x != nil {
+		return x.Txid
+	}
+	return nil
+}
+
+func (x *CandidateListV2) GetListHash() *Hash32 {
+	if x != nil {
+		return x.ListHash
+	}
+	return nil
+}
+
+func (x *CandidateListV2) GetSig() *SigDER {
+	if x != nil {
+		return x.Sig
+	}
+	return nil
+}
+
+// --- Epoch finalization (checkpoint anchor for resync) ---
+// accepted_txids_hash = SHA256(concat(sorted accepted txid bytes))
+// frontiers_root      = SHA256(concat(sorted (account_id||head_hash) bytes)) for this epoch snapshot
+type EpochFinalization struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Epoch             uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	AcceptedTxidsHash *Hash32                `protobuf:"bytes,2,opt,name=accepted_txids_hash,json=acceptedTxidsHash,proto3" json:"accepted_txids_hash,omitempty"`
+	FrontiersRoot     *Hash32                `protobuf:"bytes,3,opt,name=frontiers_root,json=frontiersRoot,proto3" json:"frontiers_root,omitempty"`
+	Signer            *Pub32                 `protobuf:"bytes,4,opt,name=signer,proto3" json:"signer,omitempty"` // validator_id
+	Sig               *SigDER                `protobuf:"bytes,5,opt,name=sig,proto3" json:"sig,omitempty"`       // signature over digest(epoch, accepted_txids_hash, frontiers_root)
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *EpochFinalization) Reset() {
+	*x = EpochFinalization{}
+	mi := &file_proto_anos_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EpochFinalization) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EpochFinalization) ProtoMessage() {}
+
+func (x *EpochFinalization) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EpochFinalization.ProtoReflect.Descriptor instead.
+func (*EpochFinalization) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *EpochFinalization) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *EpochFinalization) GetAcceptedTxidsHash() *Hash32 {
+	if x != nil {
+		return x.AcceptedTxidsHash
+	}
+	return nil
+}
+
+func (x *EpochFinalization) GetFrontiersRoot() *Hash32 {
+	if x != nil {
+		return x.FrontiersRoot
+	}
+	return nil
+}
+
+func (x *EpochFinalization) GetSigner() *Pub32 {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *EpochFinalization) GetSig() *SigDER {
+	if x != nil {
+		return x.Sig
+	}
+	return nil
+}
+
+type SyncLatestRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncLatestRequest) Reset() {
+	*x = SyncLatestRequest{}
+	mi := &file_proto_anos_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncLatestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncLatestRequest) ProtoMessage() {}
+
+func (x *SyncLatestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncLatestRequest.ProtoReflect.Descriptor instead.
+func (*SyncLatestRequest) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{24}
+}
+
+type SyncLatestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LatestEpoch   uint64                 `protobuf:"varint,1,opt,name=latest_epoch,json=latestEpoch,proto3" json:"latest_epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncLatestResponse) Reset() {
+	*x = SyncLatestResponse{}
+	mi := &file_proto_anos_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncLatestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncLatestResponse) ProtoMessage() {}
+
+func (x *SyncLatestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncLatestResponse.ProtoReflect.Descriptor instead.
+func (*SyncLatestResponse) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SyncLatestResponse) GetLatestEpoch() uint64 {
+	if x != nil {
+		return x.LatestEpoch
+	}
+	return 0
+}
+
+type SyncFinalizationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncFinalizationRequest) Reset() {
+	*x = SyncFinalizationRequest{}
+	mi := &file_proto_anos_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncFinalizationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncFinalizationRequest) ProtoMessage() {}
+
+func (x *SyncFinalizationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncFinalizationRequest.ProtoReflect.Descriptor instead.
+func (*SyncFinalizationRequest) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *SyncFinalizationRequest) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+type SyncFinalizationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Finalizations []*EpochFinalization   `protobuf:"bytes,1,rep,name=finalizations,proto3" json:"finalizations,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncFinalizationResponse) Reset() {
+	*x = SyncFinalizationResponse{}
+	mi := &file_proto_anos_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncFinalizationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncFinalizationResponse) ProtoMessage() {}
+
+func (x *SyncFinalizationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncFinalizationResponse.ProtoReflect.Descriptor instead.
+func (*SyncFinalizationResponse) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *SyncFinalizationResponse) GetFinalizations() []*EpochFinalization {
+	if x != nil {
+		return x.Finalizations
+	}
+	return nil
+}
+
+type FrontierEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Account       *AccountId             `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"` // 32 bytes
+	Head          *Hash32                `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`       // 32 bytes
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FrontierEntry) Reset() {
+	*x = FrontierEntry{}
+	mi := &file_proto_anos_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FrontierEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FrontierEntry) ProtoMessage() {}
+
+func (x *FrontierEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FrontierEntry.ProtoReflect.Descriptor instead.
+func (*FrontierEntry) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *FrontierEntry) GetAccount() *AccountId {
+	if x != nil {
+		return x.Account
+	}
+	return nil
+}
+
+func (x *FrontierEntry) GetHead() *Hash32 {
+	if x != nil {
+		return x.Head
+	}
+	return nil
+}
+
+type SyncFrontiersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Cursor        *AccountId             `protobuf:"bytes,2,opt,name=cursor,proto3" json:"cursor,omitempty"` // optional; empty means start
+	Limit         uint32                 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncFrontiersRequest) Reset() {
+	*x = SyncFrontiersRequest{}
+	mi := &file_proto_anos_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncFrontiersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncFrontiersRequest) ProtoMessage() {}
+
+func (x *SyncFrontiersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncFrontiersRequest.ProtoReflect.Descriptor instead.
+func (*SyncFrontiersRequest) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SyncFrontiersRequest) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *SyncFrontiersRequest) GetCursor() *AccountId {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+func (x *SyncFrontiersRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type SyncFrontiersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Entries       []*FrontierEntry       `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
+	NextCursor    *AccountId             `protobuf:"bytes,3,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"` // empty when done
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncFrontiersResponse) Reset() {
+	*x = SyncFrontiersResponse{}
+	mi := &file_proto_anos_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncFrontiersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncFrontiersResponse) ProtoMessage() {}
+
+func (x *SyncFrontiersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncFrontiersResponse.ProtoReflect.Descriptor instead.
+func (*SyncFrontiersResponse) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *SyncFrontiersResponse) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *SyncFrontiersResponse) GetEntries() []*FrontierEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *SyncFrontiersResponse) GetNextCursor() *AccountId {
+	if x != nil {
+		return x.NextCursor
+	}
+	return nil
+}
+
+type SyncChainRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Account       *AccountId             `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"`
+	TargetHead    *Hash32                `protobuf:"bytes,2,opt,name=target_head,json=targetHead,proto3" json:"target_head,omitempty"`
+	Have          *Hash32                `protobuf:"bytes,3,opt,name=have,proto3" json:"have,omitempty"` // optional; empty means "no have"
+	MaxBlocks     uint32                 `protobuf:"varint,4,opt,name=max_blocks,json=maxBlocks,proto3" json:"max_blocks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncChainRequest) Reset() {
+	*x = SyncChainRequest{}
+	mi := &file_proto_anos_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncChainRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncChainRequest) ProtoMessage() {}
+
+func (x *SyncChainRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncChainRequest.ProtoReflect.Descriptor instead.
+func (*SyncChainRequest) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SyncChainRequest) GetAccount() *AccountId {
+	if x != nil {
+		return x.Account
+	}
+	return nil
+}
+
+func (x *SyncChainRequest) GetTargetHead() *Hash32 {
+	if x != nil {
+		return x.TargetHead
+	}
+	return nil
+}
+
+func (x *SyncChainRequest) GetHave() *Hash32 {
+	if x != nil {
+		return x.Have
+	}
+	return nil
+}
+
+func (x *SyncChainRequest) GetMaxBlocks() uint32 {
+	if x != nil {
+		return x.MaxBlocks
+	}
+	return 0
+}
+
+type SyncChainResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tx            []*Tx                  `protobuf:"bytes,1,rep,name=tx,proto3" json:"tx,omitempty"` // from target head backwards (head-first order)
+	ReachedHave   bool                   `protobuf:"varint,2,opt,name=reached_have,json=reachedHave,proto3" json:"reached_have,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncChainResponse) Reset() {
+	*x = SyncChainResponse{}
+	mi := &file_proto_anos_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncChainResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncChainResponse) ProtoMessage() {}
+
+func (x *SyncChainResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncChainResponse.ProtoReflect.Descriptor instead.
+func (*SyncChainResponse) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *SyncChainResponse) GetTx() []*Tx {
+	if x != nil {
+		return x.Tx
+	}
+	return nil
+}
+
+func (x *SyncChainResponse) GetReachedHave() bool {
+	if x != nil {
+		return x.ReachedHave
+	}
+	return false
+}
+
 var File_proto_anos_proto protoreflect.FileDescriptor
 
 const file_proto_anos_proto_rawDesc = "" +
@@ -1304,7 +2147,62 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x17ListReceivablesResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x125\n" +
 	"\vreceivables\x18\x02 \x03(\v2\x13.anos.v2.ReceivableR\vreceivables\x12'\n" +
-	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error*H\n" +
+	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error\"\x16\n" +
+	"\x06SigDER\x12\f\n" +
+	"\x01v\x18\x01 \x01(\fR\x01v\"f\n" +
+	"\x05TxInv\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\"\n" +
+	"\x04from\x18\x02 \x01(\v2\x0e.anos.v2.Pub32R\x04from\x12#\n" +
+	"\x04txid\x18\x03 \x03(\v2\x0f.anos.v2.Hash32R\x04txid\"g\n" +
+	"\x06TxWant\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\"\n" +
+	"\x04from\x18\x02 \x01(\v2\x0e.anos.v2.Pub32R\x04from\x12#\n" +
+	"\x04txid\x18\x03 \x03(\v2\x0f.anos.v2.Hash32R\x04txid\"_\n" +
+	"\x06TxPush\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\"\n" +
+	"\x04from\x18\x02 \x01(\v2\x0e.anos.v2.Pub32R\x04from\x12\x1b\n" +
+	"\x02tx\x18\x03 \x03(\v2\v.anos.v2.TxR\x02tx\"\xc9\x01\n" +
+	"\x0fCandidateListV2\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12*\n" +
+	"\bproposer\x18\x02 \x01(\v2\x0e.anos.v2.Pub32R\bproposer\x12#\n" +
+	"\x04txid\x18\x03 \x03(\v2\x0f.anos.v2.Hash32R\x04txid\x12,\n" +
+	"\tlist_hash\x18\x04 \x01(\v2\x0f.anos.v2.Hash32R\blistHash\x12!\n" +
+	"\x03sig\x18\x05 \x01(\v2\x0f.anos.v2.SigDERR\x03sig\"\xed\x01\n" +
+	"\x11EpochFinalization\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12?\n" +
+	"\x13accepted_txids_hash\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x11acceptedTxidsHash\x126\n" +
+	"\x0efrontiers_root\x18\x03 \x01(\v2\x0f.anos.v2.Hash32R\rfrontiersRoot\x12&\n" +
+	"\x06signer\x18\x04 \x01(\v2\x0e.anos.v2.Pub32R\x06signer\x12!\n" +
+	"\x03sig\x18\x05 \x01(\v2\x0f.anos.v2.SigDERR\x03sig\"\x13\n" +
+	"\x11SyncLatestRequest\"7\n" +
+	"\x12SyncLatestResponse\x12!\n" +
+	"\flatest_epoch\x18\x01 \x01(\x04R\vlatestEpoch\"/\n" +
+	"\x17SyncFinalizationRequest\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\"\\\n" +
+	"\x18SyncFinalizationResponse\x12@\n" +
+	"\rfinalizations\x18\x01 \x03(\v2\x1a.anos.v2.EpochFinalizationR\rfinalizations\"b\n" +
+	"\rFrontierEntry\x12,\n" +
+	"\aaccount\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\x12#\n" +
+	"\x04head\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x04head\"n\n" +
+	"\x14SyncFrontiersRequest\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12*\n" +
+	"\x06cursor\x18\x02 \x01(\v2\x12.anos.v2.AccountIdR\x06cursor\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\rR\x05limit\"\x94\x01\n" +
+	"\x15SyncFrontiersResponse\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x120\n" +
+	"\aentries\x18\x02 \x03(\v2\x16.anos.v2.FrontierEntryR\aentries\x123\n" +
+	"\vnext_cursor\x18\x03 \x01(\v2\x12.anos.v2.AccountIdR\n" +
+	"nextCursor\"\xb6\x01\n" +
+	"\x10SyncChainRequest\x12,\n" +
+	"\aaccount\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\x120\n" +
+	"\vtarget_head\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\n" +
+	"targetHead\x12#\n" +
+	"\x04have\x18\x03 \x01(\v2\x0f.anos.v2.Hash32R\x04have\x12\x1d\n" +
+	"\n" +
+	"max_blocks\x18\x04 \x01(\rR\tmaxBlocks\"S\n" +
+	"\x11SyncChainResponse\x12\x1b\n" +
+	"\x02tx\x18\x01 \x03(\v2\v.anos.v2.TxR\x02tx\x12!\n" +
+	"\freached_have\x18\x02 \x01(\bR\vreachedHave*H\n" +
 	"\x06TxType\x12\x17\n" +
 	"\x13TX_TYPE_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fTX_TYPE_SEND\x10\x01\x12\x13\n" +
@@ -1323,27 +2221,42 @@ func file_proto_anos_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_anos_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_anos_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_proto_anos_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_proto_anos_proto_goTypes = []any{
-	(TxType)(0),                     // 0: anos.v2.TxType
-	(*Hash32)(nil),                  // 1: anos.v2.Hash32
-	(*Sig64)(nil),                   // 2: anos.v2.Sig64
-	(*Pub32)(nil),                   // 3: anos.v2.Pub32
-	(*AccountId)(nil),               // 4: anos.v2.AccountId
-	(*TxBodySend)(nil),              // 5: anos.v2.TxBodySend
-	(*TxBodyReceive)(nil),           // 6: anos.v2.TxBodyReceive
-	(*TxSignable)(nil),              // 7: anos.v2.TxSignable
-	(*Tx)(nil),                      // 8: anos.v2.Tx
-	(*Receivable)(nil),              // 9: anos.v2.Receivable
-	(*EpochRecord)(nil),             // 10: anos.v2.EpochRecord
-	(*ApiError)(nil),                // 11: anos.v2.ApiError
-	(*SubmitTxRequest)(nil),         // 12: anos.v2.SubmitTxRequest
-	(*SubmitTxResponse)(nil),        // 13: anos.v2.SubmitTxResponse
-	(*AccountState)(nil),            // 14: anos.v2.AccountState
-	(*GetAccountRequest)(nil),       // 15: anos.v2.GetAccountRequest
-	(*GetAccountResponse)(nil),      // 16: anos.v2.GetAccountResponse
-	(*ListReceivablesRequest)(nil),  // 17: anos.v2.ListReceivablesRequest
-	(*ListReceivablesResponse)(nil), // 18: anos.v2.ListReceivablesResponse
+	(TxType)(0),                      // 0: anos.v2.TxType
+	(*Hash32)(nil),                   // 1: anos.v2.Hash32
+	(*Sig64)(nil),                    // 2: anos.v2.Sig64
+	(*Pub32)(nil),                    // 3: anos.v2.Pub32
+	(*AccountId)(nil),                // 4: anos.v2.AccountId
+	(*TxBodySend)(nil),               // 5: anos.v2.TxBodySend
+	(*TxBodyReceive)(nil),            // 6: anos.v2.TxBodyReceive
+	(*TxSignable)(nil),               // 7: anos.v2.TxSignable
+	(*Tx)(nil),                       // 8: anos.v2.Tx
+	(*Receivable)(nil),               // 9: anos.v2.Receivable
+	(*EpochRecord)(nil),              // 10: anos.v2.EpochRecord
+	(*ApiError)(nil),                 // 11: anos.v2.ApiError
+	(*SubmitTxRequest)(nil),          // 12: anos.v2.SubmitTxRequest
+	(*SubmitTxResponse)(nil),         // 13: anos.v2.SubmitTxResponse
+	(*AccountState)(nil),             // 14: anos.v2.AccountState
+	(*GetAccountRequest)(nil),        // 15: anos.v2.GetAccountRequest
+	(*GetAccountResponse)(nil),       // 16: anos.v2.GetAccountResponse
+	(*ListReceivablesRequest)(nil),   // 17: anos.v2.ListReceivablesRequest
+	(*ListReceivablesResponse)(nil),  // 18: anos.v2.ListReceivablesResponse
+	(*SigDER)(nil),                   // 19: anos.v2.SigDER
+	(*TxInv)(nil),                    // 20: anos.v2.TxInv
+	(*TxWant)(nil),                   // 21: anos.v2.TxWant
+	(*TxPush)(nil),                   // 22: anos.v2.TxPush
+	(*CandidateListV2)(nil),          // 23: anos.v2.CandidateListV2
+	(*EpochFinalization)(nil),        // 24: anos.v2.EpochFinalization
+	(*SyncLatestRequest)(nil),        // 25: anos.v2.SyncLatestRequest
+	(*SyncLatestResponse)(nil),       // 26: anos.v2.SyncLatestResponse
+	(*SyncFinalizationRequest)(nil),  // 27: anos.v2.SyncFinalizationRequest
+	(*SyncFinalizationResponse)(nil), // 28: anos.v2.SyncFinalizationResponse
+	(*FrontierEntry)(nil),            // 29: anos.v2.FrontierEntry
+	(*SyncFrontiersRequest)(nil),     // 30: anos.v2.SyncFrontiersRequest
+	(*SyncFrontiersResponse)(nil),    // 31: anos.v2.SyncFrontiersResponse
+	(*SyncChainRequest)(nil),         // 32: anos.v2.SyncChainRequest
+	(*SyncChainResponse)(nil),        // 33: anos.v2.SyncChainResponse
 }
 var file_proto_anos_proto_depIdxs = []int32{
 	4,  // 0: anos.v2.TxBodySend.to:type_name -> anos.v2.AccountId
@@ -1379,11 +2292,35 @@ var file_proto_anos_proto_depIdxs = []int32{
 	4,  // 30: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
 	9,  // 31: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
 	11, // 32: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
-	33, // [33:33] is the sub-list for method output_type
-	33, // [33:33] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	3,  // 33: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
+	1,  // 34: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
+	3,  // 35: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
+	1,  // 36: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
+	3,  // 37: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
+	8,  // 38: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
+	3,  // 39: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
+	1,  // 40: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
+	1,  // 41: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
+	19, // 42: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
+	1,  // 43: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
+	1,  // 44: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
+	3,  // 45: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
+	19, // 46: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
+	24, // 47: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
+	4,  // 48: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
+	1,  // 49: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
+	4,  // 50: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
+	29, // 51: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
+	4,  // 52: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
+	4,  // 53: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
+	1,  // 54: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
+	1,  // 55: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
+	8,  // 56: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
+	57, // [57:57] is the sub-list for method output_type
+	57, // [57:57] is the sub-list for method input_type
+	57, // [57:57] is the sub-list for extension type_name
+	57, // [57:57] is the sub-list for extension extendee
+	0,  // [0:57] is the sub-list for field type_name
 }
 
 func init() { file_proto_anos_proto_init() }
@@ -1405,7 +2342,7 @@ func file_proto_anos_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_anos_proto_rawDesc), len(file_proto_anos_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   18,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -1,10 +1,15 @@
 package core
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -29,21 +34,36 @@ type EngineConfig struct {
 	EpochDuration time.Duration
 	// GenesisUnixMs anchors epoch numbering to wall-clock time:
 	// epoch = floor((nowMs - genesisMs) / epochMs) + 1
-	GenesisUnixMs  int64
-	QuorumPercent  int // used only for conflict resolution
-	HTTPClient     *http.Client
-	CandidatesSkew time.Duration
+	GenesisUnixMs             int64
+	QuorumPercent             int // used only for conflict resolution
+	FinalizationQuorumPercent int // quorum for EpochFinalization agreement (default 60)
+	HTTPClient                *http.Client
+	CandidatesSkew            time.Duration
+	FinalizationSkew          time.Duration
 
-	FundAccount [32]byte
+	FundAccount    [32]byte
+	GenesisAccount [32]byte
+	GenesisSupply  uint64
 }
 
 type Engine struct {
 	cfg EngineConfig
 
-	mu      sync.Mutex
-	mempool [][]byte
+	mu sync.Mutex
 	// epoch -> validator_id -> candidate list
-	peerLists map[uint64]map[[33]byte]*CandidateList
+	peerLists     map[uint64]map[[33]byte]*CandidateList
+	txPool        map[[32]byte][]byte     // txid -> raw tx bytes (submitted/gossiped/fetched)
+	txSeenEpoch   map[[32]byte]uint64     // txid -> epoch when first seen
+	conflictPool  map[[32]byte][][32]byte // keyHash -> txids (all conflict candidates we’ve seen)
+	approved      map[[32]byte][32]byte   // keyHash -> txid we “approve” this epoch
+	gossipPending map[[32]byte]struct{}   // txids to announce on next gossip tick
+
+	peerFinals map[uint64]map[[33]byte]*pb.EpochFinalization // epoch -> signer -> fin
+
+	// --- resync state (minimal state machine) ---
+	resync            ResyncState
+	resyncNextAttempt time.Time
+	resyncFailCount   int
 
 	startOnce sync.Once
 }
@@ -52,8 +72,8 @@ type CandidateList struct {
 	Epoch       uint64
 	ValidatorID [33]byte
 	ListHash    [32]byte
-	SigDER      []byte   // ASN.1 DER ECDSA signature
-	Txs         [][]byte // raw protobuf-encoded pb.Tx messages
+	SigDER      []byte
+	TxIDs       [][32]byte // txids only (votes)
 }
 
 // For consistent logging
@@ -86,19 +106,27 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	if cfg.QuorumPercent == 0 {
 		cfg.QuorumPercent = 80
 	}
+	if cfg.FinalizationQuorumPercent == 0 {
+		cfg.FinalizationQuorumPercent = 60
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 2 * time.Second}
 	}
 	if cfg.CandidatesSkew == 0 {
 		cfg.CandidatesSkew = 300 * time.Millisecond
 	}
+	if cfg.FinalizationSkew == 0 {
+		cfg.FinalizationSkew = 500 * time.Millisecond
+	}
 	e := &Engine{
 		cfg:       cfg,
-		mempool:   make([][]byte, 0, 1024),
 		peerLists: make(map[uint64]map[[33]byte]*CandidateList),
 	}
 
 	if err := cfg.DB.Update(func(tx *bbolt.Tx) error { return ensureBuckets(tx) }); err != nil {
+		return nil, err
+	}
+	if err := e.ensureGenesisOnBoot(); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -117,10 +145,74 @@ func (e *Engine) SubmitTx(raw []byte) error {
 	if err := crypto.VerifyTxSignature(tx); err != nil {
 		return err
 	}
+	txid, err := crypto.TxID(tx)
+	if err != nil {
+		return err
+	}
+
+	// If we already have this tx (either still in txPool OR persisted in DB),
+	// don't re-enqueue it or re-announce it. This prevents repeated /tx/get cycles.
+	if e.HasTx(txid) {
+		acct4 := "--------"
+		if tx.Account != nil && len(tx.Account.V) >= 4 {
+			acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+		}
+		log.Printf("[tx] submit dup txid=%x acct=%s seq=%d type=%s", txid[:4], acct4, tx.Seq, tx.Type.String())
+		return nil
+	}
+
+	seen := e.epochNow()
+
+	dup := false
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.mempool = append(e.mempool, append([]byte(nil), raw...))
+	if e.txPool == nil {
+		e.txPool = make(map[[32]byte][]byte)
+	}
+	if _, ok := e.txPool[txid]; ok {
+		dup = true
+	} else {
+		e.txPool[txid] = append([]byte(nil), raw...)
+	}
+
+	if e.txSeenEpoch == nil {
+		e.txSeenEpoch = make(map[[32]byte]uint64)
+	}
+	if _, exists := e.txSeenEpoch[txid]; !exists {
+		e.txSeenEpoch[txid] = seen
+	}
+
+	if e.gossipPending == nil {
+		e.gossipPending = make(map[[32]byte]struct{})
+	}
+	e.gossipPending[txid] = struct{}{}
+
+	if e.conflictPool == nil {
+		e.conflictPool = make(map[[32]byte][][32]byte)
+	}
+	if e.approved == nil {
+		e.approved = make(map[[32]byte][32]byte)
+	}
+
+	if key, ok := conflictKeyHash(tx); ok {
+		// store candidate
+		e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
+		// set approval if unset
+		if _, exists := e.approved[key]; !exists {
+			e.approved[key] = txid
+		}
+	}
+	e.mu.Unlock()
+
+	acct4 := "--------"
+	if tx.Account != nil && len(tx.Account.V) >= 4 {
+		acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+	}
+	status := "ok"
+	if dup {
+		status = "dup"
+	}
+	log.Printf("[tx] submit %s txid=%x acct=%s seq=%d type=%s", status, txid[:4], acct4, tx.Seq, tx.Type.String())
 	return nil
 }
 
@@ -177,19 +269,8 @@ func (e *Engine) ReceiveCandidateList(fromURL string, cl *CandidateList) error {
 		return errors.New("unknown validator")
 	}
 
-	// 2) recompute txids and canonical list hash
-	txids := make([][32]byte, 0, len(cl.Txs))
-	for _, raw := range cl.Txs {
-		tx, err := ParseTx(raw)
-		if err != nil {
-			return errors.New("bad tx in candidate list")
-		}
-		id, err := crypto.TxID(tx)
-		if err != nil {
-			return errors.New("bad txid")
-		}
-		txids = append(txids, id)
-	}
+	// 2) canonicalize txids and recompute list hash
+	txids := append([][32]byte(nil), cl.TxIDs...)
 	sort.Slice(txids, func(i, j int) bool { return bytes.Compare(txids[i][:], txids[j][:]) < 0 })
 	recomputed := crypto.CandidatesListHash(txids)
 	if recomputed != cl.ListHash {
@@ -227,6 +308,313 @@ func (e *Engine) ReceiveCandidateList(fromURL string, cl *CandidateList) error {
 	return nil
 }
 
+func (e *Engine) ValidatorPub(id [33]byte) *ecdsa.PublicKey {
+	return e.cfg.ValidatorSet[id]
+}
+
+func (e *Engine) HasTx(txid [32]byte) bool {
+	e.mu.Lock()
+	_, ok := e.txPool[txid]
+	e.mu.Unlock()
+	if ok {
+		return true
+	}
+	found := false
+	_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		if err := ensureBuckets(tx); err != nil {
+			return err
+		}
+		found = hasTx(tx, txid)
+		return nil
+	})
+	return found
+}
+
+func (e *Engine) GetTxBytes(txid [32]byte) []byte {
+	e.mu.Lock()
+	if raw, ok := e.txPool[txid]; ok && len(raw) > 0 {
+		out := append([]byte(nil), raw...)
+		e.mu.Unlock()
+		return out
+	}
+	e.mu.Unlock()
+
+	var out []byte
+	_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		if err := ensureBuckets(tx); err != nil {
+			return err
+		}
+		raw, err := getTxRaw(tx, txid)
+		if err != nil {
+			return nil
+		}
+		out = raw
+		return nil
+	})
+	return out
+}
+
+func (e *Engine) LatestFinalizedEpoch() uint64 {
+	var latest uint64
+	_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(BFinalizations)
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if len(k) < 8 {
+				continue
+			}
+			ep := binary.BigEndian.Uint64(k[:8])
+			if ep > latest {
+				latest = ep
+			}
+		}
+		return nil
+	})
+	return latest
+}
+
+func (e *Engine) ReceiveGossipedTx(raw []byte) error {
+	tx, err := ParseTx(raw)
+	if err != nil {
+		return err
+	}
+	// basic signature check now; full snapshot validation happens at epoch close
+	if err := crypto.VerifyTxSignature(tx); err != nil {
+		return err
+	}
+	txid, err := crypto.TxID(tx)
+	if err != nil {
+		return err
+	}
+
+	// If we already have this tx persisted (likely already applied), ignore it.
+	// This prevents re-adding completed txs to txPool/approved and triggering fetch loops.
+	if e.HasTx(txid) {
+		acct4 := "--------"
+		if tx.Account != nil && len(tx.Account.V) >= 4 {
+			acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+		}
+		log.Printf("[tx] gossip dup txid=%x acct=%s seq=%d type=%s", txid[:4], acct4, tx.Seq, tx.Type.String())
+		return nil
+	}
+
+	seen := e.epochNow()
+
+	e.mu.Lock()
+	if e.txSeenEpoch == nil {
+		e.txSeenEpoch = make(map[[32]byte]uint64)
+	}
+	if _, exists := e.txSeenEpoch[txid]; !exists {
+		e.txSeenEpoch[txid] = seen
+	}
+
+	gdup := false
+
+	if e.txPool == nil {
+		e.txPool = make(map[[32]byte][]byte)
+	}
+	if _, ok := e.txPool[txid]; ok {
+		gdup = true
+	} else {
+		e.txPool[txid] = append([]byte(nil), raw...)
+	}
+	if e.conflictPool == nil {
+		e.conflictPool = make(map[[32]byte][][32]byte)
+	}
+	if e.approved == nil {
+		e.approved = make(map[[32]byte][32]byte)
+	}
+	if key, ok := conflictKeyHash(tx); ok {
+		e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
+		if _, exists := e.approved[key]; !exists {
+			e.approved[key] = txid
+		}
+	}
+	e.mu.Unlock()
+
+	acct4 := "--------"
+	if tx.Account != nil && len(tx.Account.V) >= 4 {
+		acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+	}
+	status := "ok"
+	if gdup {
+		status = "dup"
+	}
+	log.Printf("[tx] gossip %s txid=%x acct=%s seq=%d type=%s", status, txid[:4], acct4, tx.Seq, tx.Type.String())
+
+	return nil
+}
+
+func (e *Engine) ReceiveFinalization(fin *pb.EpochFinalization) error {
+	if fin == nil {
+		return errors.New("nil finalization")
+	}
+	if fin.Signer == nil || len(fin.Signer.V) != 33 {
+		return errors.New("bad signer")
+	}
+	if fin.AcceptedTxidsHash == nil || len(fin.AcceptedTxidsHash.V) != 32 {
+		return errors.New("bad accepted_txids_hash")
+	}
+	if fin.FrontiersRoot == nil || len(fin.FrontiersRoot.V) != 32 {
+		return errors.New("bad frontiers_root")
+	}
+	if fin.Sig == nil || len(fin.Sig.V) < 64 || len(fin.Sig.V) > 80 {
+		return errors.New("bad sig")
+	}
+
+	var signerID [33]byte
+	copy(signerID[:], fin.Signer.V)
+
+	pub := e.cfg.ValidatorSet[signerID]
+	if pub == nil {
+		return errors.New("unknown validator")
+	}
+
+	var accepted [32]byte
+	copy(accepted[:], fin.AcceptedTxidsHash.V)
+	var root [32]byte
+	copy(root[:], fin.FrontiersRoot.V)
+
+	digest := crypto.FinalizationDigestP256(fin.Epoch, accepted, root)
+	if !crypto.VerifyFinalizationSigP256(pub, digest, fin.Sig.V) {
+		return errors.New("bad signature")
+	}
+
+	// store raw proto in DB
+	raw, err := proto.Marshal(fin)
+	if err != nil {
+		return err
+	}
+	if err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
+		if err := ensureBuckets(tx); err != nil {
+			return err
+		}
+		return PutFinalization(tx, fin.Epoch, signerID, raw)
+	}); err != nil {
+		return err
+	}
+
+	// store in memory for quick quorum checks
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.peerFinals == nil {
+		e.peerFinals = make(map[uint64]map[[33]byte]*pb.EpochFinalization)
+	}
+	m := e.peerFinals[fin.Epoch]
+	if m == nil {
+		m = make(map[[33]byte]*pb.EpochFinalization)
+		e.peerFinals[fin.Epoch] = m
+	}
+	// idempotent accept if identical
+	if prev := m[signerID]; prev != nil {
+		// if same hashes and sig, ignore
+		if bytes.Equal(prev.AcceptedTxidsHash.V, fin.AcceptedTxidsHash.V) &&
+			bytes.Equal(prev.FrontiersRoot.V, fin.FrontiersRoot.V) &&
+			bytes.Equal(prev.Sig.V, fin.Sig.V) {
+			return nil
+		}
+		// conflicting finalization from same signer for same epoch is a protocol violation
+		return errors.New("conflicting finalization for signer+epoch")
+	}
+
+	m[signerID] = fin
+	return nil
+}
+
+// SyncChain returns raw tx bytes walking backwards from targetHead (inclusive).
+// Stops if it reaches `have` (if non-zero) or hits max blocks or missing tx bytes.
+// Returns (txsHeadBackwards, reachedHave).
+func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byte, max int) ([][]byte, bool) {
+	log.Printf("SYNCCHAIN ENGINE CALLED acct=%x target=%x have=%x max=%d", accountID[:4], targetHead[:4], have[:4], max)
+	if max <= 0 {
+		max = 2000
+	}
+
+	var out [][]byte
+	reachedHave := false
+
+	if err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		if tx.Bucket(BTxs) == nil {
+			return nil
+		}
+
+		cur := targetHead
+		for i := 0; i < max; i++ {
+			// stop if we hit have (and have != zero)
+			if have != ([32]byte{}) && bytes.Equal(cur[:], have[:]) {
+				reachedHave = true
+				break
+			}
+
+			raw, err := getTxRaw(tx, cur)
+			if err != nil {
+				// If the caller did not specify a boundary (have==zero) and the targetHead
+				// isn't a stored tx, treat this as reaching the effective base.
+				// This covers synthetic anchors (e.g. genesis head) that are not in BTxs.
+				if have == ([32]byte{}) {
+					reachedHave = true
+				}
+				log.Printf("SYNCCHAIN head missing cur=%x have=%x reached=%v", cur[:4], have[:4], have == ([32]byte{}))
+				break
+			}
+			out = append(out, raw)
+
+			ptx, err := ParseTx(raw)
+			if err != nil {
+				break
+			}
+
+			// Your Tx uses Prev (not PrevHash)
+			if ptx.Prev == nil || len(ptx.Prev.V) != 32 {
+				break
+			}
+			var prev [32]byte
+			copy(prev[:], ptx.Prev.V)
+
+			// If caller asked for a boundary "have", we can consider it reached
+			// when the current tx's Prev points to that boundary.
+			// This is important when "have" is a synthetic anchor (e.g. GENESIS_HEAD)
+			// that is not an actual stored tx.
+			if have != ([32]byte{}) && bytes.Equal(prev[:], have[:]) {
+				reachedHave = true
+				break
+			}
+
+			// stop at zero prev (open/genesis boundary)
+			var z [32]byte
+			if bytes.Equal(prev[:], z[:]) {
+				// If caller did not specify a "have" boundary (have==zero),
+				// then reaching chain start means we've reached the boundary.
+				if have == ([32]byte{}) {
+					reachedHave = true
+				}
+				break
+			}
+
+			// If have is unset (zero) and the previous link isn't actually stored,
+			// we've reached the effective base (synthetic anchor / genesis head).
+			if have == ([32]byte{}) {
+				if _, err := getTxRaw(tx, prev); err != nil {
+					log.Printf("SYNCCHAIN stopping at missing prev=%x acct=%x (treat reached)", prev[:4], accountID[:4])
+					reachedHave = true
+					break
+				}
+			}
+
+			cur = prev
+		}
+		return nil
+	}); err != nil {
+		log.Printf("SYNCCHAIN DB.View error: %v", err)
+	}
+
+	log.Printf("SYNCCHAIN DONE acct=%x target=%x out=%d reached=%v", accountID[:4], targetHead[:4], len(out), reachedHave)
+	return out, reachedHave
+}
+
 // loop runs epochs.
 func (e *Engine) loop(ctx context.Context) {
 	epochMs := e.cfg.EpochDuration.Milliseconds()
@@ -237,6 +625,40 @@ func (e *Engine) loop(ctx context.Context) {
 	genesisMs := e.cfg.GenesisUnixMs
 
 	for {
+		// If we're in resync mode, short-circuit normal epoch processing.
+		// This prevents continuing to apply epochs while we know we're divergent.
+		if e.resync.IsActive() {
+			// Backoff gate: don't hammer resync in a tight loop on repeated failure.
+			e.mu.Lock()
+			next := e.resyncNextAttempt
+			active := e.resync.IsActive()
+			e.mu.Unlock()
+
+			if active && !next.IsZero() && time.Now().Before(next) {
+				// Sleep until next attempt (or context cancel).
+				d := time.Until(next)
+				if d > 250*time.Millisecond {
+					d = 250 * time.Millisecond
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(d):
+				}
+				continue
+			}
+
+			_ = e.runResync(ctx)
+
+			// After resync attempt (success or failure), restart loop to re-evaluate wall-clock epoch.
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			continue
+		}
+
 		// If genesis is in the future, wait until it begins.
 		nowMs := time.Now().UnixMilli()
 		if nowMs < genesisMs {
@@ -277,15 +699,10 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		// Close: build our candidate list from txs received during this epoch window.
-		localRaw := e.drainMempool()
-		selfList, _ := e.buildCandidateList(epoch, localRaw, epochSnap)
-
-		e.elog(epoch, "local candidates built (mempool=%d)", len(localRaw))
+		selfList, _ := e.buildCandidateList(epoch, epochSnap)
 
 		// Broadcast once at epoch close
 		e.broadcastCandidates(epoch, selfList)
-
-		e.elog(epoch, "broadcast candidates to %d peers", len(e.cfg.Peers))
 
 		// Wait a small skew for peers to arrive
 		select {
@@ -295,8 +712,6 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		peerLists := e.getPeerLists(epoch)
-
-		e.elog(epoch, "peer lists received=%d", len(peerLists))
 
 		// --- Presence quorum gate (liveness) ---
 		// "All validators" here means: self + everyone in our configured Peers list.
@@ -311,9 +726,6 @@ func (e *Engine) loop(ctx context.Context) {
 		if present < required {
 			log.Printf("epoch %d skipped: presence %d/%d (<60%%); will retry next epoch", epoch, present, expected)
 
-			// Keep local txs so our candidate list can be rebuilt next epoch.
-			e.requeueMempool(localRaw)
-
 			epoch++
 			continue
 		}
@@ -326,25 +738,55 @@ func (e *Engine) loop(ctx context.Context) {
 			threshold = 1
 		}
 
-		// Union: txid -> raw, and txid support count (how many lists contained it)
+		// Union: txid support count (how many lists contained it)
 		support := make(map[[32]byte]int)
-		txBytesByID := make(map[[32]byte][]byte)
 
-		// self list contributes support=1 for its txs
-		selfTxIDs, selfByID := e.txIDsFromCandidateList(selfList)
-		for _, id := range selfTxIDs {
+		// Collect union txids (unique)
+		unionSet := make(map[[32]byte]struct{})
+
+		// self votes
+		for _, id := range selfList.TxIDs {
 			support[id]++
-			if _, ok := txBytesByID[id]; !ok {
-				txBytesByID[id] = selfByID[id]
+			unionSet[id] = struct{}{}
+		}
+
+		// peers votes
+		for _, cl := range peerLists {
+			for _, id := range cl.TxIDs {
+				support[id]++
+				unionSet[id] = struct{}{}
 			}
 		}
 
-		for _, cl := range peerLists {
-			ids, by := e.txIDsFromCandidateList(cl)
-			for _, id := range ids {
-				support[id]++
-				if _, ok := txBytesByID[id]; !ok {
-					txBytesByID[id] = by[id]
+		// Resolve unionSet -> slice
+		unionIDs := make([][32]byte, 0, len(unionSet))
+		for id := range unionSet {
+			unionIDs = append(unionIDs, id)
+		}
+
+		// Fill txBytesByID from local pool/DB; fetch missing from peers if needed
+		txBytesByID := make(map[[32]byte][]byte, len(unionIDs))
+
+		missing := make([][32]byte, 0)
+		for _, id := range unionIDs {
+			raw := e.GetTxBytes(id) // <- must check txPool then DB
+			if len(raw) == 0 {
+				missing = append(missing, id)
+				continue
+			}
+			txBytesByID[id] = raw
+		}
+
+		// If missing, fetch from peers via /peer/tx/get and try again
+		if len(missing) > 0 {
+			e.fetchMissingTxs(epoch, missing)
+			for _, id := range missing {
+				if _, ok := txBytesByID[id]; ok {
+					continue
+				}
+				raw := e.GetTxBytes(id)
+				if len(raw) > 0 {
+					txBytesByID[id] = raw
 				}
 			}
 		}
@@ -423,16 +865,97 @@ func (e *Engine) loop(ctx context.Context) {
 			winners[k.acct] = eligible[0].id
 		}
 
-		e.elog(epoch, "apply begin (winner_accounts=%d, candidate_txs=%d)", len(winners), len(validParsed))
-		if err := e.applyWinners(winners, txBytesByID, validParsed); err != nil {
-			e.elog(epoch, "ERROR: apply failed: %v", err)
-			// Optional: requeue localRaw so you don't lose txs on apply failure
-			// e.requeueMempool(localRaw)
-			// Depending on your preference, continue or return:
-			// continue
-		} else {
-			e.elog(epoch, "COMMIT OK (elapsed=%s)", time.Since(start).Truncate(time.Millisecond))
+		// Apply winners to DB
+		acceptedSet := make(map[[32]byte]struct{}, len(winners))
+		for _, txid := range winners {
+			acceptedSet[txid] = struct{}{}
 		}
+
+		_, failedApplied, aerr := e.applyWinners(winners, txBytesByID, validParsed)
+		if aerr != nil {
+			e.elog(epoch, "apply error: %v", aerr)
+		}
+		if len(failedApplied) > 0 {
+			// log top few failures (don’t spam)
+			i := 0
+			for id, ferr := range failedApplied {
+				e.elog(epoch, "apply rejected tx %x...: %v", id[:4], ferr)
+				i++
+				if i >= 5 {
+					break
+				}
+			}
+		}
+
+		// Cleanup: delete losers + delete accepted-but-failed-apply
+		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied)
+
+		// --- Finalization (checkpoint anchor) ---
+		acceptedIDs := make([][32]byte, 0, len(winners))
+		for _, txid := range winners {
+			acceptedIDs = append(acceptedIDs, txid)
+		}
+		sort.Slice(acceptedIDs, func(i, j int) bool { return bytes.Compare(acceptedIDs[i][:], acceptedIDs[j][:]) < 0 })
+
+		acceptedHash := crypto.CandidatesListHash(acceptedIDs)
+
+		// snapshot epoch frontiers after commit, then compute root
+		if err := SaveEpochFrontiers(e.cfg.DB, epoch); err != nil {
+			e.elog(epoch, "finalization: SaveEpochFrontiers error: %v", err)
+		} else {
+			root, err := ComputeFrontiersRoot(e.cfg.DB, epoch)
+			if err != nil {
+				e.elog(epoch, "finalization: ComputeFrontiersRoot error: %v", err)
+			} else {
+				signerID := e.cfg.Signer.PublicKeyCompressed()
+				digest := crypto.FinalizationDigestP256(epoch, acceptedHash, root)
+				sigDER, sigErr := e.cfg.Signer.SignDigest(digest)
+				if sigErr != nil {
+					e.elog(epoch, "finalization: sign error: %v", sigErr)
+				} else {
+					fin := &pb.EpochFinalization{
+						Epoch:             epoch,
+						AcceptedTxidsHash: &pb.Hash32{V: acceptedHash[:]},
+						FrontiersRoot:     &pb.Hash32{V: root[:]},
+						Signer:            &pb.Pub32{V: signerID[:]},
+						Sig:               &pb.SigDER{V: sigDER}, // <-- SigDER (not Sig64)
+					}
+
+					// store our own finalization (and memory map)
+					if err := e.ReceiveFinalization(fin); err != nil {
+						e.elog(epoch, "finalization: store self error: %v", err)
+					}
+
+					// broadcast to peers
+					e.broadcastFinalization(fin)
+
+					// allow some skew to receive peers’ finalizations (peers must finish apply first)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(e.cfg.FinalizationSkew):
+					}
+
+					// quorum check (log-only for now; later this triggers resync)
+					qAccepted, qRoot, qCount, qNeed := e.finalizationQuorum(epoch)
+					if qCount >= qNeed {
+						if !bytes.Equal(qAccepted[:], acceptedHash[:]) || !bytes.Equal(qRoot[:], root[:]) {
+							e.elog(epoch, "FINALIZATION MISMATCH quorum=%d/%d: have=(%x,%x) want=(%x,%x)",
+								qCount, qNeed, acceptedHash[:], root[:], qAccepted[:], qRoot[:])
+							// Enter resync mode immediately. Normal epoch processing will be paused.
+							e.triggerResync(epoch, qAccepted, qRoot)
+						} else {
+							e.elog(epoch,
+								"finalized. quorum=%d/%d: (elapsed=%s) : broadcasted to %d : lists received=%d : Applied (winner_accounts=%d, candidate_txs=%d)",
+								qCount, qNeed, time.Since(start).Truncate(time.Millisecond), len(e.cfg.Peers), len(peerLists), len(winners), len(validParsed))
+						}
+					} else {
+						e.elog(epoch, "finalization not reached: %d/%d", qCount, qNeed)
+					}
+				}
+			}
+		}
+		// --- end finalization ---
 	}
 }
 
@@ -478,67 +1001,27 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 	return snap, err
 }
 
-func (e *Engine) drainMempool() [][]byte {
+// buildCandidateListV2 builds a txid-only candidate list ("votes").
+// It ignores raws and uses e.approved (one tx per conflict key).
+func (e *Engine) buildCandidateList(epoch uint64, snap *Snapshot) (*CandidateList, [][32]byte) {
+	_ = snap
+
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	out := e.mempool
-	e.mempool = make([][]byte, 0, 1024)
-	return out
-}
-
-func (e *Engine) requeueMempool(raws [][]byte) {
-	if len(raws) == 0 {
-		return
+	ids := make([][32]byte, 0, len(e.approved))
+	for _, txid := range e.approved {
+		ids = append(ids, txid)
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.Unlock()
 
-	// Prepend, so txs that were already seen get retried first.
-	rebuilt := make([][]byte, 0, len(raws))
-	for _, r := range raws {
-		rebuilt = append(rebuilt, append([]byte(nil), r...))
-	}
-	e.mempool = append(rebuilt, e.mempool...)
-}
-
-// buildCandidateList includes ALL valid txs seen during epoch (even conflicting), per Model B.
-func (e *Engine) buildCandidateList(epoch uint64, raws [][]byte, snap *Snapshot) (*CandidateList, [][32]byte) {
-	type item struct {
-		id  [32]byte
-		raw []byte
-	}
-	items := make([]item, 0, len(raws))
-	for _, raw := range raws {
-		tx, err := ParseTx(raw)
-		if err != nil {
-			continue
-		}
-		id, err := ValidateTxAgainstSnapshot(tx, snap)
-		if err != nil {
-			continue
-		}
-		items = append(items, item{id: id, raw: raw})
-	}
-
-	// Sort by txid for stable list_hash/signature
-	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i].id[:], items[j].id[:]) < 0 })
-
-	ids := make([][32]byte, 0, len(items))
-	txs := make([][]byte, 0, len(items))
-
-	for _, it := range items {
-		ids = append(ids, it.id)
-		txs = append(txs, it.raw)
-	}
+	// stable order for list_hash/signature
+	sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
 
 	listHash := crypto.CandidatesListHash(ids)
-
 	vid := e.cfg.Signer.PublicKeyCompressed()
 
 	digest := crypto.CandidatesDigestP256(epoch, vid, listHash)
 	sigDER, err := e.cfg.Signer.SignDigest(digest)
 	if err != nil {
-		// return unsigned list; peers will reject, but avoids panic
 		sigDER = nil
 	}
 
@@ -547,52 +1030,119 @@ func (e *Engine) buildCandidateList(epoch uint64, raws [][]byte, snap *Snapshot)
 		ValidatorID: vid,
 		ListHash:    listHash,
 		SigDER:      sigDER,
-		Txs:         txs,
+		TxIDs:       ids, // <-- txids only
 	}
 
 	return cl, ids
-
 }
 
 func (e *Engine) broadcastCandidates(epoch uint64, cl *CandidateList) {
-	// Encode as a deterministic protobuf-delimited stream:
-	// [Pub32 validator_id][EpochRecord {epoch, accepted_txs=list_hash_placeholder}][Sig64 sig][Tx...]
-	// We do not need to send list_hash separately because receivers recompute it from txids and verify the signature.
-	// We send it anyway as a fixed field in CandidateList for debugging; over the wire we include it as 32 bytes in the EpochRecord.state_root field.
-	buf := &bytes.Buffer{}
-
-	// 1) validator id
-	_, _ = protodelim.MarshalTo(buf, &pb.Pub32{V: cl.ValidatorID[:]})
-
-	// 2) epoch + list_hash (carried in state_root for transport convenience)
-	er := &pb.EpochRecord{
-		Epoch:     cl.Epoch,
-		StateRoot: &pb.Hash32{V: cl.ListHash[:]},
+	msg := &pb.CandidateListV2{
+		Epoch:    cl.Epoch,
+		Proposer: &pb.Pub32{V: cl.ValidatorID[:]},
+		ListHash: &pb.Hash32{V: cl.ListHash[:]},
+		Sig:      &pb.SigDER{V: cl.SigDER}, // if your proto uses SigDER; use Sig64 if you kept Sig64
 	}
-	_, _ = protodelim.MarshalTo(buf, er)
-
-	// 3) signature
-	_, _ = protodelim.MarshalTo(buf, &pb.Sig64{V: cl.SigDER})
-
-	// 4) txs (full bodies)
-	for _, raw := range cl.Txs {
-		tx, err := ParseTx(raw)
-		if err != nil {
-			continue
-		}
-		_, _ = protodelim.MarshalTo(buf, tx)
+	for _, id := range cl.TxIDs {
+		msg.Txid = append(msg.Txid, &pb.Hash32{V: id[:]})
 	}
 
-	body := buf.Bytes()
 	for _, peer := range e.cfg.Peers {
 		peer = strings.TrimRight(peer, "/")
 		go func(p string) {
-			req, _ := http.NewRequest("POST", p+"/peer/candidates", bytes.NewReader(body))
+			var buf bytes.Buffer
+			_, _ = protodelim.MarshalTo(&buf, msg)
+
+			req, _ := http.NewRequest("POST", p+"/peer/candidates", &buf)
 			req.Header.Set("Content-Type", "application/x-protobuf")
-			_, _ = e.cfg.HTTPClient.Do(req)
+			// Optional: include your own URL if you use it for debugging
+			// req.Header.Set("X-Validator-URL", e.cfg.SelfURL)
+
+			resp, err := e.cfg.HTTPClient.Do(req)
+			if err != nil {
+				log.Printf("candidates POST to %s failed: %v", p, err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				b, _ := io.ReadAll(resp.Body)
+				log.Printf("candidates POST to %s non-2xx: %s body=%q", p, resp.Status, string(b))
+			}
 		}(peer)
 	}
+
 	_ = epoch
+}
+
+func (e *Engine) broadcastFinalization(fin *pb.EpochFinalization) {
+	if fin == nil {
+		return
+	}
+	for _, peer := range e.cfg.Peers {
+		peer = strings.TrimRight(peer, "/")
+		go func(p string) {
+			var buf bytes.Buffer
+			_, _ = protodelim.MarshalTo(&buf, fin)
+
+			req, _ := http.NewRequest("POST", p+"/peer/finalization", &buf)
+			req.Header.Set("Content-Type", "application/x-protobuf")
+			resp, err := e.cfg.HTTPClient.Do(req)
+			if err != nil {
+				log.Printf("finalization POST to %s failed: %v", p, err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				b, _ := io.ReadAll(resp.Body)
+				log.Printf("finalization POST to %s non-2xx: %s body=%q", p, resp.Status, string(b))
+			}
+		}(peer)
+	}
+}
+
+func (e *Engine) finalizationQuorum(epoch uint64) (bestAccepted [32]byte, bestRoot [32]byte, count int, need int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	total := len(e.cfg.ValidatorSet)
+	need = (total*e.cfg.FinalizationQuorumPercent + 99) / 100
+	if need < 1 {
+		need = 1
+	}
+
+	m := e.peerFinals[epoch]
+	if m == nil {
+		return [32]byte{}, [32]byte{}, 0, need
+	}
+
+	type key struct {
+		accepted [32]byte
+		root     [32]byte
+	}
+	counts := make(map[key]int)
+
+	for _, fin := range m {
+		if fin == nil || fin.AcceptedTxidsHash == nil || fin.FrontiersRoot == nil {
+			continue
+		}
+		var a [32]byte
+		copy(a[:], fin.AcceptedTxidsHash.V)
+		var r [32]byte
+		copy(r[:], fin.FrontiersRoot.V)
+		k := key{accepted: a, root: r}
+		counts[k]++
+	}
+
+	bestK := key{}
+	bestC := 0
+	for k, c := range counts {
+		if c > bestC {
+			bestC = c
+			bestK = k
+		}
+	}
+
+	return bestK.accepted, bestK.root, bestC, need
 }
 
 func (e *Engine) getPeerLists(epoch uint64) map[[33]byte]*CandidateList {
@@ -607,49 +1157,254 @@ func (e *Engine) getPeerLists(epoch uint64) map[[33]byte]*CandidateList {
 	return out
 }
 
-// txIDsFromCandidateList decodes tx bytes and computes txids.
-func (e *Engine) txIDsFromCandidateList(cl *CandidateList) ([][32]byte, map[[32]byte][]byte) {
-	ids := make([][32]byte, 0, len(cl.Txs))
-	byID := make(map[[32]byte][]byte, len(cl.Txs))
-	for _, raw := range cl.Txs {
-		tx, err := ParseTx(raw)
-		if err != nil {
-			continue
-		}
-		id, err := crypto.TxID(tx)
-		if err != nil {
-			continue
-		}
-		ids = append(ids, id)
-		byID[id] = raw
-	}
-	sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
-	return ids, byID
-}
+func (e *Engine) applyWinners(winners map[[32]byte][32]byte, txBytesByID map[[32]byte][]byte, parsed map[[32]byte]*pb.Tx) (map[[32]byte]struct{}, map[[32]byte]error, error) {
+	applied := make(map[[32]byte]struct{})
+	failed := make(map[[32]byte]error)
 
-func (e *Engine) applyWinners(winners map[[32]byte][32]byte, txBytesByID map[[32]byte][]byte, parsed map[[32]byte]*pb.Tx) error {
-	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
+	err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
 		view := &bboltTxView{tx: tx}
+
 		for _, id := range winners {
 			raw := txBytesByID[id]
 			p := parsed[id]
+
 			if raw == nil || p == nil {
-				// parse if missing
 				if raw != nil {
-					pp, err := ParseTx(raw)
-					if err == nil {
+					pp, perr := ParseTx(raw)
+					if perr == nil {
 						p = pp
 					}
 				}
 			}
 			if raw == nil || p == nil {
+				failed[id] = errors.New("missing tx bytes/parse")
 				continue
 			}
-			_ = ApplyTx(view, raw, p, id, e.cfg.FundAccount)
+
+			if aerr := ApplyTx(view, raw, p, id, e.cfg.FundAccount); aerr != nil {
+				failed[id] = aerr
+				continue
+			}
+			applied[id] = struct{}{}
+			// log.Printf("APPLIED tx %x... acct=%x... seq=%d", id[:4], p.Account.V[:4], p.Seq)
 		}
 		return nil
+	})
+
+	return applied, failed, err
+}
+
+func conflictKeyHash(tx *pb.Tx) ([32]byte, bool) {
+	if tx.Account == nil || len(tx.Account.V) != 32 {
+		return [32]byte{}, false
+	}
+	if tx.Prev == nil || len(tx.Prev.V) != 32 {
+		return [32]byte{}, false
+	}
+	seq := tx.Seq
+
+	// hash(account || prev || seqBE)
+	buf := make([]byte, 32+32+8)
+	copy(buf[:32], tx.Account.V)
+	copy(buf[32:64], tx.Prev.V)
+	binary.BigEndian.PutUint64(buf[64:], seq)
+	return sha256.Sum256(buf), true
+}
+
+func appendUnique32(list [][32]byte, v [32]byte) [][32]byte {
+	for _, x := range list {
+		if bytes.Equal(x[:], v[:]) {
+			return list
+		}
+	}
+	return append(list, v)
+}
+
+func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
+	if len(missing) == 0 {
+		return
+	}
+
+	for _, peer := range e.cfg.Peers {
+		peer = strings.TrimRight(peer, "/")
+
+		vid := e.cfg.Signer.PublicKeyCompressed()
+		want := &pb.TxWant{
+			Epoch: epoch,
+			From:  &pb.Pub32{V: vid[:]},
+		}
+		for _, id := range missing {
+			want.Txid = append(want.Txid, &pb.Hash32{V: id[:]})
+		}
+
+		var buf bytes.Buffer
+		_, _ = protodelim.MarshalTo(&buf, want)
+
+		req, _ := http.NewRequest("POST", peer+"/peer/tx/get", &buf)
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		resp, err := e.cfg.HTTPClient.Do(req)
+		if err != nil || resp == nil {
+			continue
+		}
+
+		func() {
+			defer resp.Body.Close()
+
+			var push pb.TxPush
+			br := bufio.NewReader(resp.Body)
+			if err := protodelim.UnmarshalFrom(br, &push); err != nil {
+				return
+			}
+
+			for _, tx := range push.Tx {
+				if tx == nil {
+					continue
+				}
+				raw, err := CanonicalTxBytes(tx)
+				if err != nil {
+					continue
+				}
+				_ = e.ReceiveGossipedTx(raw)
+			}
+		}()
+
+		return
+	}
+}
+
+func (e *Engine) epochAtUnixMs(nowMs int64) uint64 {
+	genesisMs := e.cfg.GenesisUnixMs
+	epochMs := int64(e.cfg.EpochDuration / time.Millisecond)
+	if epochMs <= 0 {
+		epochMs = 1
+	}
+	return uint64((nowMs-genesisMs)/epochMs) + 1
+}
+
+func (e *Engine) epochNow() uint64 {
+	return e.epochAtUnixMs(time.Now().UnixMilli())
+}
+
+func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{}, failedApplied map[[32]byte]error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Option 2 (boundary-safe):
+	// - Drop txs that were first seen in the epoch that just closed (seenEpoch <= epoch).
+	//   This enforces: "if not accepted by an epoch, delete entirely" (no retry).
+	// - Keep txs seen AFTER the boundary (seenEpoch > epoch). Those belong to the next epoch
+	//   and have not been decided yet (so it's not a retry).
+	// - Also drop any accepted-but-failed-applied txs to prevent "wins forever" loops.
+
+	// If maps are nil, just clear per-epoch caches
+	if e.txSeenEpoch == nil {
+		if e.peerLists != nil {
+			delete(e.peerLists, epoch)
+		}
+		if e.peerFinals != nil {
+			delete(e.peerFinals, epoch)
+		}
+		return
+	}
+
+	// 1) Drop everything from the closed epoch window (seenEpoch <= epoch)
+	for txid, seen := range e.txSeenEpoch {
+		if seen <= epoch {
+			delete(e.txSeenEpoch, txid)
+			if e.txPool != nil {
+				delete(e.txPool, txid)
+			}
+			if e.gossipPending != nil {
+				delete(e.gossipPending, txid)
+			}
+		}
+	}
+
+	// 2) Drop accepted-but-failed-applied (even if their seenEpoch was > epoch due to timing)
+	for txid := range failedApplied {
+		delete(e.txSeenEpoch, txid)
+		if e.txPool != nil {
+			delete(e.txPool, txid)
+		}
+		if e.gossipPending != nil {
+			delete(e.gossipPending, txid)
+		}
+	}
+
+	// Drop applied txs no matter when they were "seen", to avoid re-advertising.
+	for txid := range accepted {
+		delete(e.txSeenEpoch, txid)
+		if e.txPool != nil {
+			delete(e.txPool, txid)
+		}
+		if e.gossipPending != nil {
+			delete(e.gossipPending, txid)
+		}
+	}
+
+	// 3) Rebuild conflictPool + approved from remaining txPool (these are next-epoch txs only)
+	e.conflictPool = make(map[[32]byte][][32]byte)
+	e.approved = make(map[[32]byte][32]byte)
+
+	for txid, raw := range e.txPool {
+		tx, err := ParseTx(raw)
+		if err != nil {
+			// malformed; drop it
+			delete(e.txPool, txid)
+			delete(e.txSeenEpoch, txid)
+			continue
+		}
+		if key, ok := conflictKeyHash(tx); ok {
+			e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
+			if _, exists := e.approved[key]; !exists {
+				e.approved[key] = txid
+			}
+		}
+	}
+
+	// 4) Clear per-epoch caches so they don't grow forever
+	if e.peerLists != nil {
+		delete(e.peerLists, epoch)
+	}
+	if e.peerFinals != nil {
+		delete(e.peerFinals, epoch)
+	}
+
+}
+
+func (e *Engine) ensureGenesisOnBoot() error {
+	gen := e.cfg.GenesisAccount
+
+	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
+		if err := ensureBuckets(tx); err != nil {
+			return err
+		}
+
+		head, bal, seq := getAccount(tx, gen)
+
+		// If already initialized (non-zero head and seq>=1), done.
+		var zero [32]byte
+		if head != zero && seq >= 1 {
+			return nil
+		}
+
+		// If no balance yet, set to configured supply.
+		if bal == 0 {
+			bal = e.cfg.GenesisSupply
+		}
+
+		// Create a deterministic “genesis head” (doesn't require a new tx type)
+		// This is just an anchor so first real spend uses prev=head and seq=2.
+		h := sha256.Sum256(append([]byte("ANOS_GENESIS_HEAD_V1:"), gen[:]...))
+
+		head = h
+		if seq < 1 {
+			seq = 1
+		}
+
+		return putAccount(tx, gen, head, bal, seq)
 	})
 }

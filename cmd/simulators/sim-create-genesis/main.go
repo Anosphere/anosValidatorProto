@@ -2,6 +2,7 @@ package main
 
 import (
 	"anos/internal/core"
+	"bufio"
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protodelim"
 	"google.golang.org/protobuf/proto"
 
 	"anos/internal/crypto"
@@ -20,87 +22,32 @@ import (
 )
 
 func main() {
-	baseURL := getenv("BASE_URL", "http://127.0.0.1:8080")
-
-	epochMS := getenvInt("EPOCH_MS", 5000)
-	pollEvery := 200 * time.Millisecond
-	maxWait := 30 * time.Second
+	validatorUrlList := splitCSV(getenv("VALIDATOR_URL_LIST", ""))
 
 	// Generate Alice/Bob keys (AccountId == pubkey bytes)
-	alPub, alPriv := mustKeypair()
-	boPub, boPriv := mustKeypair()
-	alHex := hex.EncodeToString(alPub)
-	boHex := hex.EncodeToString(boPub)
-
-	fmt.Println("Alice:", alHex)
-	fmt.Println("Bob  :", boHex)
+	genesisHex := getenv("GENESIS_HEX", "")
 
 	// Fund Alice (dev/admin). With start-of-epoch snapshot, wait one epoch so next snapshot includes faucet.
-	mustPOST(baseURL + "/faucet?acct=" + alHex + "&amount=10000000")
-
-	time.Sleep(time.Duration(epochMS)*time.Millisecond + 300*time.Millisecond)
-
-	// Fetch Alice state
-	alState := mustGetAccount(baseURL, alPub)
-
-	// Set Amount to Send
-	amount := uint64(1 * core.UnitsPerAnos)
-
-	// Calculate Fee
-	fee := core.ExpectedFee(amount)
-
-	// Build SEND tx from Alice to Bob
-	send := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_SEND,
-		Account: &pb.AccountId{V: alPub},
-		Prev:    &pb.Hash32{V: alState.Head.GetV()},
-		Seq:     alState.Seq + 1,
-		Body: &pb.Tx_Send{Send: &pb.TxBodySend{
-			To:     &pb.AccountId{V: boPub},
-			Amount: amount,
-			Fee:    fee,
-			// ReceivableId may be set after txid derivation, but is NOT part of signing bytes for SEND.
-		}},
+	for _, v := range validatorUrlList {
+		mustPOST(v + "/faucet?acct=" + genesisHex + "&amount=42000000000000")
 	}
-	signTx(send, alPriv)
 
-	// Derive txid + expected receivable_id (for display; validators compute)
-	txid, _ := crypto.TxID(send)
-	rid := crypto.ReceivableIDFromTxID(txid)
-	// Client MAY set it (validators require match). Optional:
-	send.GetSend().ReceivableId = &pb.Hash32{V: rid[:]}
+}
 
-	mustSubmit(baseURL, send)
-
-	fmt.Println("Sent txid:", hex.EncodeToString(txid[:]))
-	fmt.Println("Receivable:", hex.EncodeToString(rid[:]))
-
-	// Poll until Bob sees the receivable (meaning SEND committed at epoch close)
-	targetRID := waitForReceivable(baseURL, boPub, rid[:], pollEvery, maxWait)
-	fmt.Println("Bob receivable id:", hex.EncodeToString(targetRID))
-
-	// Fetch Bob state
-	boState := mustGetAccount(baseURL, boPub)
-
-	recv := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_RECEIVE,
-		Account: &pb.AccountId{V: boPub},
-		Prev:    &pb.Hash32{V: boState.Head.GetV()},
-		Seq:     boState.Seq + 1,
-		Body: &pb.Tx_Receive{Receive: &pb.TxBodyReceive{
-			ReceivableId: &pb.Hash32{V: targetRID},
-		}},
+func splitCSV(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
 	}
-	signTx(recv, boPriv)
-	mustSubmit(baseURL, recv)
-
-	// Wait until Bob seq increments (RECEIVE committed)
-	waitForSeqAtLeast(baseURL, boPub, boState.Seq+1, pollEvery, maxWait)
-
-	// Print final states
-	_ = mustGetAccount(baseURL, alPub)
-	_ = mustGetAccount(baseURL, boPub)
-	fmt.Println("Done.")
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func signTx(tx *pb.Tx, priv ed25519.PrivateKey) {
@@ -189,11 +136,12 @@ func waitForSeqAtLeast(baseURL string, acct []byte, wantSeq uint64, pollEvery, m
 }
 
 func postProto(url string, req proto.Message, resp proto.Message) error {
-	b, err := proto.Marshal(req)
-	if err != nil {
+	var buf bytes.Buffer
+	if _, err := protodelim.MarshalTo(&buf, req); err != nil {
 		return err
 	}
-	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(b))
+
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(buf.Bytes()))
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 	httpReq.Header.Set("Accept", "application/x-protobuf")
 
@@ -206,7 +154,9 @@ func postProto(url string, req proto.Message, resp proto.Message) error {
 	if httpResp.StatusCode >= 300 {
 		return fmt.Errorf("http %d: %s", httpResp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	return proto.Unmarshal(body, resp)
+
+	br := bufio.NewReader(bytes.NewReader(body))
+	return protodelim.UnmarshalFrom(br, resp)
 }
 
 func mustKeypair() ([]byte, ed25519.PrivateKey) {

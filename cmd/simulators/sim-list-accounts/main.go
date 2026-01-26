@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -18,9 +20,17 @@ type accountHeadRow struct {
 }
 
 func main() {
-	baseURL := "http://127.0.0.1:8080"
+	validatorUrlList := splitCSV(getenv("VALIDATOR_URL_LIST", ""))
 
-	url := baseURL + "/debug/accounts/heads"
+	log.Print(validatorUrlList[0])
+
+	for _, v := range validatorUrlList {
+		getAccountHeads(v)
+	}
+}
+
+func getAccountHeads(baseUrl string) {
+	url := baseUrl + "/debug/accounts/heads"
 
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -52,6 +62,29 @@ func main() {
 	})
 
 	printTable(rows)
+}
+
+func splitCSV(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func getenv(k, def string) string {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+		return v
+	}
+	return def
 }
 
 func printTable(rows []accountHeadRow) {
