@@ -485,7 +485,8 @@ func main() {
 		for _, raw := range txs {
 			tx, err := core.ParseTx(raw)
 			if err != nil {
-				continue
+				http.Error(w, "bad tx", http.StatusInternalServerError)
+				return
 			}
 			resp.Tx = append(resp.Tx, tx)
 		}

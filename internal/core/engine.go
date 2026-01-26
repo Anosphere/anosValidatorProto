@@ -476,6 +476,7 @@ func (e *Engine) ReceiveFinalization(fin *pb.EpochFinalization) error {
 // Stops if it reaches `have` (if non-zero) or hits max blocks or missing tx bytes.
 // Returns (txsHeadBackwards, reachedHave).
 func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byte, max int) ([][]byte, bool) {
+	log.Printf("SYNCCHAIN ENGINE CALLED acct=%x target=%x have=%x max=%d", accountID[:4], targetHead[:4], have[:4], max)
 	if max <= 0 {
 		max = 2000
 	}
@@ -483,9 +484,9 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 	var out [][]byte
 	reachedHave := false
 
-	_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-		if err := ensureBuckets(tx); err != nil {
-			return err
+	if err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		if tx.Bucket(BTxs) == nil {
+			return nil
 		}
 
 		cur := targetHead
@@ -498,6 +499,13 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 
 			raw, err := getTxRaw(tx, cur)
 			if err != nil {
+				// If the caller did not specify a boundary (have==zero) and the targetHead
+				// isn't a stored tx, treat this as reaching the effective base.
+				// This covers synthetic anchors (e.g. genesis head) that are not in BTxs.
+				if have == ([32]byte{}) {
+					reachedHave = true
+				}
+				log.Printf("SYNCCHAIN head missing cur=%x have=%x reached=%v", cur[:4], have[:4], have == ([32]byte{}))
 				break
 			}
 			out = append(out, raw)
@@ -538,7 +546,7 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 			// we've reached the effective base (synthetic anchor / genesis head).
 			if have == ([32]byte{}) {
 				if _, err := getTxRaw(tx, prev); err != nil {
-					e.elog(0, "sync/chain stopping at missing prev=%x...", prev[:4])
+					log.Printf("SYNCCHAIN stopping at missing prev=%x acct=%x (treat reached)", prev[:4], accountID[:4])
 					reachedHave = true
 					break
 				}
@@ -547,8 +555,11 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 			cur = prev
 		}
 		return nil
-	})
+	}); err != nil {
+		log.Printf("SYNCCHAIN DB.View error: %v", err)
+	}
 
+	log.Printf("SYNCCHAIN DONE acct=%x target=%x out=%d reached=%v", accountID[:4], targetHead[:4], len(out), reachedHave)
 	return out, reachedHave
 }
 
