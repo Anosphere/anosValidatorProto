@@ -318,6 +318,7 @@ func main() {
 			}
 		}
 
+		log.Printf("[net] rx /peer/tx/inv from=%x epoch=%d inv=%d want=%d", fromID[:4], inv.Epoch, len(inv.Txid), len(want.Txid))
 		writeProto(w, want)
 	})
 
@@ -352,6 +353,8 @@ func main() {
 			}
 			_ = engine.ReceiveGossipedTx(raw)
 		}
+
+		log.Printf("[net] rx /peer/tx/push from=%x epoch=%d txs=%d", fromID[:4], push.Epoch, len(push.Tx))
 		w.WriteHeader(200)
 	})
 
@@ -365,6 +368,7 @@ func main() {
 			http.Error(w, "bad proto", 400)
 			return
 		}
+		log.Printf("[net] rx /peer/tx/get epoch=%d want=%d", want.Epoch, len(want.Txid))
 		out := &pb.TxPush{
 			Epoch: want.Epoch,
 			From:  &pb.Pub32{V: selfID[:]},
@@ -387,6 +391,7 @@ func main() {
 			out.Tx = append(out.Tx, tx)
 		}
 
+		log.Printf("[net] ok /peer/tx/get epoch=%d push=%d", out.Epoch, len(out.Tx))
 		writeProto(w, out)
 	})
 
@@ -516,17 +521,31 @@ func main() {
 			return
 		}
 
+		// For Logging
+		txid, _ := crypto.TxID(req.Tx)
+
+		acct4 := "--------"
+		if req.Tx.Account != nil && len(req.Tx.Account.V) >= 4 {
+			acct4 = fmt.Sprintf("%x", req.Tx.Account.V[:4])
+		}
+
+		log.Printf(
+			"[api] rx /submit txid=%x acct=%s seq=%d type=%s",
+			txid[:4],
+			acct4,
+			req.Tx.Seq,
+			req.Tx.Type.String(),
+		)
+
 		resp := &pb.SubmitTxResponse{Ok: false}
 		if err := engine.SubmitTx(raw); err != nil {
 			resp.Error = &pb.ApiError{Code: 400, Message: "reject", Detail: err.Error()}
+			log.Printf("[api] reject /submit txid=%x err=%s", txid[:4], err.Error())
 			writeProtoResponse(w, resp)
 			return
 		}
 
-		txid, err := crypto.TxID(req.Tx)
-		if err == nil {
-			resp.Txid = &pb.Hash32{V: txid[:]}
-		}
+		resp.Txid = &pb.Hash32{V: txid[:]}
 		resp.Ok = true
 		writeProtoResponse(w, resp)
 	})

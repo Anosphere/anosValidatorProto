@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -151,13 +152,30 @@ func (e *Engine) SubmitTx(raw []byte) error {
 		return err
 	}
 
+	// If we already have this tx (either still in txPool OR persisted in DB),
+	// don't re-enqueue it or re-announce it. This prevents repeated /tx/get cycles.
+	if e.HasTx(txid) {
+		acct4 := "--------"
+		if tx.Account != nil && len(tx.Account.V) >= 4 {
+			acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+		}
+		log.Printf("[tx] submit dup txid=%x acct=%s seq=%d type=%s", txid[:4], acct4, tx.Seq, tx.Type.String())
+		return nil
+	}
+
 	seen := e.epochNow()
+
+	dup := false
 
 	e.mu.Lock()
 	if e.txPool == nil {
 		e.txPool = make(map[[32]byte][]byte)
 	}
-	e.txPool[txid] = append([]byte(nil), raw...)
+	if _, ok := e.txPool[txid]; ok {
+		dup = true
+	} else {
+		e.txPool[txid] = append([]byte(nil), raw...)
+	}
 
 	if e.txSeenEpoch == nil {
 		e.txSeenEpoch = make(map[[32]byte]uint64)
@@ -187,6 +205,16 @@ func (e *Engine) SubmitTx(raw []byte) error {
 		}
 	}
 	e.mu.Unlock()
+
+	acct4 := "--------"
+	if tx.Account != nil && len(tx.Account.V) >= 4 {
+		acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+	}
+	status := "ok"
+	if dup {
+		status = "dup"
+	}
+	log.Printf("[tx] submit %s txid=%x acct=%s seq=%d type=%s", status, txid[:4], acct4, tx.Seq, tx.Type.String())
 	return nil
 }
 
@@ -364,6 +392,17 @@ func (e *Engine) ReceiveGossipedTx(raw []byte) error {
 		return err
 	}
 
+	// If we already have this tx persisted (likely already applied), ignore it.
+	// This prevents re-adding completed txs to txPool/approved and triggering fetch loops.
+	if e.HasTx(txid) {
+		acct4 := "--------"
+		if tx.Account != nil && len(tx.Account.V) >= 4 {
+			acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+		}
+		log.Printf("[tx] gossip dup txid=%x acct=%s seq=%d type=%s", txid[:4], acct4, tx.Seq, tx.Type.String())
+		return nil
+	}
+
 	seen := e.epochNow()
 
 	e.mu.Lock()
@@ -374,10 +413,14 @@ func (e *Engine) ReceiveGossipedTx(raw []byte) error {
 		e.txSeenEpoch[txid] = seen
 	}
 
+	gdup := false
+
 	if e.txPool == nil {
 		e.txPool = make(map[[32]byte][]byte)
 	}
-	if _, ok := e.txPool[txid]; !ok {
+	if _, ok := e.txPool[txid]; ok {
+		gdup = true
+	} else {
 		e.txPool[txid] = append([]byte(nil), raw...)
 	}
 	if e.conflictPool == nil {
@@ -393,6 +436,17 @@ func (e *Engine) ReceiveGossipedTx(raw []byte) error {
 		}
 	}
 	e.mu.Unlock()
+
+	acct4 := "--------"
+	if tx.Account != nil && len(tx.Account.V) >= 4 {
+		acct4 = fmt.Sprintf("%x", tx.Account.V[:4])
+	}
+	status := "ok"
+	if gdup {
+		status = "dup"
+	}
+	log.Printf("[tx] gossip %s txid=%x acct=%s seq=%d type=%s", status, txid[:4], acct4, tx.Seq, tx.Type.String())
+
 	return nil
 }
 
@@ -650,12 +704,8 @@ func (e *Engine) loop(ctx context.Context) {
 		localRaw := e.drainMempool()
 		selfList, _ := e.buildCandidateList(epoch, localRaw, epochSnap)
 
-		e.elog(epoch, "local candidates built (mempool=%d)", len(localRaw))
-
 		// Broadcast once at epoch close
 		e.broadcastCandidates(epoch, selfList)
-
-		e.elog(epoch, "broadcast candidates to %d peers", len(e.cfg.Peers))
 
 		// Wait a small skew for peers to arrive
 		select {
@@ -665,8 +715,6 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		peerLists := e.getPeerLists(epoch)
-
-		e.elog(epoch, "peer lists received=%d", len(peerLists))
 
 		// --- Presence quorum gate (liveness) ---
 		// "All validators" here means: self + everyone in our configured Peers list.
@@ -823,8 +871,6 @@ func (e *Engine) loop(ctx context.Context) {
 			winners[k.acct] = eligible[0].id
 		}
 
-		e.elog(epoch, "apply begin (winner_accounts=%d, candidate_txs=%d)", len(winners), len(validParsed))
-
 		// Apply winners to DB
 		acceptedSet := make(map[[32]byte]struct{}, len(winners))
 		for _, txid := range winners {
@@ -905,7 +951,9 @@ func (e *Engine) loop(ctx context.Context) {
 							// Enter resync mode immediately. Normal epoch processing will be paused.
 							e.triggerResync(epoch, qAccepted, qRoot)
 						} else {
-							e.elog(epoch, "finalized epoch %d quorum=%d/%d: (elapsed=%s)", epoch, qCount, qNeed, time.Since(start).Truncate(time.Millisecond))
+							e.elog(epoch,
+								"finalized. quorum=%d/%d: (elapsed=%s) : broadcasted to %d : lists received=%d : Applied (winner_accounts=%d, candidate_txs=%d)",
+								qCount, qNeed, time.Since(start).Truncate(time.Millisecond), len(e.cfg.Peers), len(peerLists), len(winners), len(validParsed))
 						}
 					} else {
 						e.elog(epoch, "finalization not reached: %d/%d", qCount, qNeed)
@@ -1171,7 +1219,7 @@ func (e *Engine) applyWinners(winners map[[32]byte][32]byte, txBytesByID map[[32
 				continue
 			}
 			applied[id] = struct{}{}
-			log.Printf("APPLIED tx %x... acct=%x... seq=%d", id[:4], p.Account.V[:4], p.Seq)
+			// log.Printf("APPLIED tx %x... acct=%x... seq=%d", id[:4], p.Account.V[:4], p.Seq)
 		}
 		return nil
 	})
@@ -1319,6 +1367,17 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 		}
 	}
 
+	// Drop applied txs no matter when they were "seen", to avoid re-advertising.
+	for txid := range accepted {
+		delete(e.txSeenEpoch, txid)
+		if e.txPool != nil {
+			delete(e.txPool, txid)
+		}
+		if e.gossipPending != nil {
+			delete(e.gossipPending, txid)
+		}
+	}
+
 	// 3) Rebuild conflictPool + approved from remaining txPool (these are next-epoch txs only)
 	e.conflictPool = make(map[[32]byte][][32]byte)
 	e.approved = make(map[[32]byte][32]byte)
@@ -1347,7 +1406,6 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 		delete(e.peerFinals, epoch)
 	}
 
-	_ = accepted // kept for signature compatibility; not used by this policy
 }
 
 func (e *Engine) ensureGenesisOnBoot() error {
