@@ -40,7 +40,9 @@ type EngineConfig struct {
 	CandidatesSkew            time.Duration
 	FinalizationSkew          time.Duration
 
-	FundAccount [32]byte
+	FundAccount    [32]byte
+	GenesisAccount [32]byte
+	GenesisSupply  uint64
 }
 
 type Engine struct {
@@ -51,11 +53,17 @@ type Engine struct {
 	// epoch -> validator_id -> candidate list
 	peerLists     map[uint64]map[[33]byte]*CandidateList
 	txPool        map[[32]byte][]byte     // txid -> raw tx bytes (submitted/gossiped/fetched)
+	txSeenEpoch   map[[32]byte]uint64     // txid -> epoch when first seen
 	conflictPool  map[[32]byte][][32]byte // keyHash -> txids (all conflict candidates we’ve seen)
 	approved      map[[32]byte][32]byte   // keyHash -> txid we “approve” this epoch
 	gossipPending map[[32]byte]struct{}   // txids to announce on next gossip tick
 
 	peerFinals map[uint64]map[[33]byte]*pb.EpochFinalization // epoch -> signer -> fin
+
+	// --- resync state (minimal state machine) ---
+	resync            ResyncState
+	resyncNextAttempt time.Time
+	resyncFailCount   int
 
 	startOnce sync.Once
 }
@@ -119,6 +127,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	if err := cfg.DB.Update(func(tx *bbolt.Tx) error { return ensureBuckets(tx) }); err != nil {
 		return nil, err
 	}
+	if err := e.ensureGenesisOnBoot(); err != nil {
+		return nil, err
+	}
 	return e, nil
 }
 
@@ -140,21 +151,33 @@ func (e *Engine) SubmitTx(raw []byte) error {
 		return err
 	}
 
+	seen := e.epochNow()
+
 	e.mu.Lock()
 	if e.txPool == nil {
 		e.txPool = make(map[[32]byte][]byte)
 	}
 	e.txPool[txid] = append([]byte(nil), raw...)
+
+	if e.txSeenEpoch == nil {
+		e.txSeenEpoch = make(map[[32]byte]uint64)
+	}
+	if _, exists := e.txSeenEpoch[txid]; !exists {
+		e.txSeenEpoch[txid] = seen
+	}
+
 	if e.gossipPending == nil {
 		e.gossipPending = make(map[[32]byte]struct{})
 	}
 	e.gossipPending[txid] = struct{}{}
+
 	if e.conflictPool == nil {
 		e.conflictPool = make(map[[32]byte][][32]byte)
 	}
 	if e.approved == nil {
 		e.approved = make(map[[32]byte][32]byte)
 	}
+
 	if key, ok := conflictKeyHash(tx); ok {
 		// store candidate
 		e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
@@ -341,7 +364,16 @@ func (e *Engine) ReceiveGossipedTx(raw []byte) error {
 		return err
 	}
 
+	seen := e.epochNow()
+
 	e.mu.Lock()
+	if e.txSeenEpoch == nil {
+		e.txSeenEpoch = make(map[[32]byte]uint64)
+	}
+	if _, exists := e.txSeenEpoch[txid]; !exists {
+		e.txSeenEpoch[txid] = seen
+	}
+
 	if e.txPool == nil {
 		e.txPool = make(map[[32]byte][]byte)
 	}
@@ -482,10 +514,34 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 			var prev [32]byte
 			copy(prev[:], ptx.Prev.V)
 
+			// If caller asked for a boundary "have", we can consider it reached
+			// when the current tx's Prev points to that boundary.
+			// This is important when "have" is a synthetic anchor (e.g. GENESIS_HEAD)
+			// that is not an actual stored tx.
+			if have != ([32]byte{}) && bytes.Equal(prev[:], have[:]) {
+				reachedHave = true
+				break
+			}
+
 			// stop at zero prev (open/genesis boundary)
 			var z [32]byte
 			if bytes.Equal(prev[:], z[:]) {
+				// If caller did not specify a "have" boundary (have==zero),
+				// then reaching chain start means we've reached the boundary.
+				if have == ([32]byte{}) {
+					reachedHave = true
+				}
 				break
+			}
+
+			// If have is unset (zero) and the previous link isn't actually stored,
+			// we've reached the effective base (synthetic anchor / genesis head).
+			if have == ([32]byte{}) {
+				if _, err := getTxRaw(tx, prev); err != nil {
+					e.elog(0, "sync/chain stopping at missing prev=%x...", prev[:4])
+					reachedHave = true
+					break
+				}
 			}
 
 			cur = prev
@@ -506,6 +562,40 @@ func (e *Engine) loop(ctx context.Context) {
 	genesisMs := e.cfg.GenesisUnixMs
 
 	for {
+		// If we're in resync mode, short-circuit normal epoch processing.
+		// This prevents continuing to apply epochs while we know we're divergent.
+		if e.resync.IsActive() {
+			// Backoff gate: don't hammer resync in a tight loop on repeated failure.
+			e.mu.Lock()
+			next := e.resyncNextAttempt
+			active := e.resync.IsActive()
+			e.mu.Unlock()
+
+			if active && !next.IsZero() && time.Now().Before(next) {
+				// Sleep until next attempt (or context cancel).
+				d := time.Until(next)
+				if d > 250*time.Millisecond {
+					d = 250 * time.Millisecond
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(d):
+				}
+				continue
+			}
+
+			_ = e.runResync(ctx)
+
+			// After resync attempt (success or failure), restart loop to re-evaluate wall-clock epoch.
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			continue
+		}
+
 		// If genesis is in the future, wait until it begins.
 		nowMs := time.Now().UnixMilli()
 		if nowMs < genesisMs {
@@ -723,6 +813,32 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		e.elog(epoch, "apply begin (winner_accounts=%d, candidate_txs=%d)", len(winners), len(validParsed))
+
+		// Apply winners to DB
+		acceptedSet := make(map[[32]byte]struct{}, len(winners))
+		for _, txid := range winners {
+			acceptedSet[txid] = struct{}{}
+		}
+
+		_, failedApplied, aerr := e.applyWinners(winners, txBytesByID, validParsed)
+		if aerr != nil {
+			e.elog(epoch, "apply error: %v", aerr)
+		}
+		if len(failedApplied) > 0 {
+			// log top few failures (don’t spam)
+			i := 0
+			for id, ferr := range failedApplied {
+				e.elog(epoch, "apply rejected tx %x...: %v", id[:4], ferr)
+				i++
+				if i >= 5 {
+					break
+				}
+			}
+		}
+
+		// Cleanup mempool: delete losers + delete accepted-but-failed-apply
+		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied)
+
 		// --- Finalization (checkpoint anchor) ---
 		acceptedIDs := make([][32]byte, 0, len(winners))
 		for _, txid := range winners {
@@ -773,8 +889,10 @@ func (e *Engine) loop(ctx context.Context) {
 					qAccepted, qRoot, qCount, qNeed := e.finalizationQuorum(epoch)
 					if qCount >= qNeed {
 						if !bytes.Equal(qAccepted[:], acceptedHash[:]) || !bytes.Equal(qRoot[:], root[:]) {
-							e.elog(epoch, "FINALIZATION MISMATCH quorum=%d/%d (trigger resync later): have=(%x,%x) want=(%x,%x)",
+							e.elog(epoch, "FINALIZATION MISMATCH quorum=%d/%d: have=(%x,%x) want=(%x,%x)",
 								qCount, qNeed, acceptedHash[:], root[:], qAccepted[:], qRoot[:])
+							// Enter resync mode immediately. Normal epoch processing will be paused.
+							e.triggerResync(epoch, qAccepted, qRoot)
 						} else {
 							e.elog(epoch, "finalized epoch %d quorum=%d/%d: (elapsed=%s)", epoch, qCount, qNeed, time.Since(start).Truncate(time.Millisecond))
 						}
@@ -1010,31 +1128,44 @@ func (e *Engine) getPeerLists(epoch uint64) map[[33]byte]*CandidateList {
 	return out
 }
 
-func (e *Engine) applyWinners(winners map[[32]byte][32]byte, txBytesByID map[[32]byte][]byte, parsed map[[32]byte]*pb.Tx) error {
-	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
+func (e *Engine) applyWinners(winners map[[32]byte][32]byte, txBytesByID map[[32]byte][]byte, parsed map[[32]byte]*pb.Tx) (map[[32]byte]struct{}, map[[32]byte]error, error) {
+	applied := make(map[[32]byte]struct{})
+	failed := make(map[[32]byte]error)
+
+	err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
 		view := &bboltTxView{tx: tx}
+
 		for _, id := range winners {
 			raw := txBytesByID[id]
 			p := parsed[id]
+
 			if raw == nil || p == nil {
-				// parse if missing
 				if raw != nil {
-					pp, err := ParseTx(raw)
-					if err == nil {
+					pp, perr := ParseTx(raw)
+					if perr == nil {
 						p = pp
 					}
 				}
 			}
 			if raw == nil || p == nil {
+				failed[id] = errors.New("missing tx bytes/parse")
 				continue
 			}
-			_ = ApplyTx(view, raw, p, id, e.cfg.FundAccount)
+
+			if aerr := ApplyTx(view, raw, p, id, e.cfg.FundAccount); aerr != nil {
+				failed[id] = aerr
+				continue
+			}
+			applied[id] = struct{}{}
+			log.Printf("APPLIED tx %x... acct=%x... seq=%d", id[:4], p.Account.V[:4], p.Seq)
 		}
 		return nil
 	})
+
+	return applied, failed, err
 }
 
 func conflictKeyHash(tx *pb.Tx) ([32]byte, bool) {
@@ -1103,7 +1234,7 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 				if tx == nil {
 					continue
 				}
-				raw, err := proto.Marshal(tx)
+				raw, err := CanonicalTxBytes(tx)
 				if err != nil {
 					continue
 				}
@@ -1113,4 +1244,131 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 
 		return
 	}
+}
+
+func (e *Engine) epochAtUnixMs(nowMs int64) uint64 {
+	genesisMs := e.cfg.GenesisUnixMs
+	epochMs := int64(e.cfg.EpochDuration / time.Millisecond)
+	if epochMs <= 0 {
+		epochMs = 1
+	}
+	return uint64((nowMs-genesisMs)/epochMs) + 1
+}
+
+func (e *Engine) epochNow() uint64 {
+	return e.epochAtUnixMs(time.Now().UnixMilli())
+}
+
+func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{}, failedApplied map[[32]byte]error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Option 2 (boundary-safe):
+	// - Drop txs that were first seen in the epoch that just closed (seenEpoch <= epoch).
+	//   This enforces: "if not accepted by an epoch, delete entirely" (no retry).
+	// - Keep txs seen AFTER the boundary (seenEpoch > epoch). Those belong to the next epoch
+	//   and have not been decided yet (so it's not a retry).
+	// - Also drop any accepted-but-failed-applied txs to prevent "wins forever" loops.
+
+	// 0) Always clear the raw inbound mempool buffer for the next epoch window
+	e.mempool = make([][]byte, 0, 1024)
+
+	// If maps are nil, just clear per-epoch caches
+	if e.txSeenEpoch == nil {
+		if e.peerLists != nil {
+			delete(e.peerLists, epoch)
+		}
+		if e.peerFinals != nil {
+			delete(e.peerFinals, epoch)
+		}
+		return
+	}
+
+	// 1) Drop everything from the closed epoch window (seenEpoch <= epoch)
+	for txid, seen := range e.txSeenEpoch {
+		if seen <= epoch {
+			delete(e.txSeenEpoch, txid)
+			if e.txPool != nil {
+				delete(e.txPool, txid)
+			}
+			if e.gossipPending != nil {
+				delete(e.gossipPending, txid)
+			}
+		}
+	}
+
+	// 2) Drop accepted-but-failed-applied (even if their seenEpoch was > epoch due to timing)
+	for txid := range failedApplied {
+		delete(e.txSeenEpoch, txid)
+		if e.txPool != nil {
+			delete(e.txPool, txid)
+		}
+		if e.gossipPending != nil {
+			delete(e.gossipPending, txid)
+		}
+	}
+
+	// 3) Rebuild conflictPool + approved from remaining txPool (these are next-epoch txs only)
+	e.conflictPool = make(map[[32]byte][][32]byte)
+	e.approved = make(map[[32]byte][32]byte)
+
+	for txid, raw := range e.txPool {
+		tx, err := ParseTx(raw)
+		if err != nil {
+			// malformed; drop it
+			delete(e.txPool, txid)
+			delete(e.txSeenEpoch, txid)
+			continue
+		}
+		if key, ok := conflictKeyHash(tx); ok {
+			e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
+			if _, exists := e.approved[key]; !exists {
+				e.approved[key] = txid
+			}
+		}
+	}
+
+	// 4) Clear per-epoch caches so they don't grow forever
+	if e.peerLists != nil {
+		delete(e.peerLists, epoch)
+	}
+	if e.peerFinals != nil {
+		delete(e.peerFinals, epoch)
+	}
+
+	_ = accepted // kept for signature compatibility; not used by this policy
+}
+
+func (e *Engine) ensureGenesisOnBoot() error {
+	gen := e.cfg.GenesisAccount
+
+	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
+		if err := ensureBuckets(tx); err != nil {
+			return err
+		}
+
+		head, bal, seq := getAccount(tx, gen)
+
+		// If already initialized (non-zero head and seq>=1), done.
+		var zero [32]byte
+		if head != zero && seq >= 1 {
+			return nil
+		}
+
+		// If no balance yet, set to configured supply.
+		if bal == 0 {
+			bal = e.cfg.GenesisSupply
+		}
+
+		// Create a deterministic “genesis head” (doesn't require a new tx type)
+		// This is just an anchor so first real spend uses prev=head and seq=2.
+		h := sha256.Sum256(append([]byte("ANOS_GENESIS_HEAD_V1:"), gen[:]...))
+
+		head = h
+		if seq < 1 {
+			seq = 1
+		}
+
+		return putAccount(tx, gen, head, bal, seq)
+	})
 }

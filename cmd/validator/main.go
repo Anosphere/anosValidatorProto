@@ -94,6 +94,26 @@ func main() {
 	var fundAcct [32]byte
 	copy(fundAcct[:], fundBytes)
 
+	genHex := strings.TrimSpace(os.Getenv("GENESIS_HEX"))
+	if genHex == "" {
+		log.Fatal("GENESIS_HEX is required (32-byte hex public key)")
+	}
+	genBytes, err := hex.DecodeString(genHex)
+	if err != nil || len(genBytes) != 32 {
+		log.Fatal("GENESIS_HEX must decode to exactly 32 bytes")
+	}
+	var genesisAcct [32]byte
+	copy(genesisAcct[:], genBytes)
+
+	genSupplyStr := strings.TrimSpace(os.Getenv("GENESIS_SUPPLY_UNITS"))
+	if genSupplyStr == "" {
+		log.Fatal("GENESIS_SUPPLY_UNITS is required (uint64)")
+	}
+	genSupply, err := strconv.ParseUint(genSupplyStr, 10, 64)
+	if err != nil {
+		log.Fatal("GENESIS_SUPPLY_UNITS must be uint64")
+	}
+
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		log.Fatal(err)
@@ -111,6 +131,8 @@ func main() {
 		FinalizationQuorumPercent: 60,
 		FinalizationSkew:          800 * time.Millisecond,
 		FundAccount:               fundAcct,
+		GenesisAccount:            genesisAcct,
+		GenesisSupply:             genSupply,
 	})
 
 	if err != nil {
@@ -324,7 +346,7 @@ func main() {
 			if tx == nil {
 				continue
 			}
-			raw, err := proto.Marshal(tx)
+			raw, err := core.CanonicalTxBytes(tx)
 			if err != nil {
 				continue
 			}
@@ -487,7 +509,7 @@ func main() {
 			http.Error(w, "missing tx", 400)
 			return
 		}
-		raw, err := proto.Marshal(req.Tx)
+		raw, err := core.CanonicalTxBytes(req.Tx)
 		if err != nil {
 			http.Error(w, "bad tx", 400)
 			return
