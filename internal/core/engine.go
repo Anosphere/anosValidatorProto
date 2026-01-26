@@ -49,8 +49,7 @@ type EngineConfig struct {
 type Engine struct {
 	cfg EngineConfig
 
-	mu      sync.Mutex
-	mempool [][]byte
+	mu sync.Mutex
 	// epoch -> validator_id -> candidate list
 	peerLists     map[uint64]map[[33]byte]*CandidateList
 	txPool        map[[32]byte][]byte     // txid -> raw tx bytes (submitted/gossiped/fetched)
@@ -121,7 +120,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 	e := &Engine{
 		cfg:       cfg,
-		mempool:   make([][]byte, 0, 1024),
 		peerLists: make(map[uint64]map[[33]byte]*CandidateList),
 	}
 
@@ -701,8 +699,7 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		// Close: build our candidate list from txs received during this epoch window.
-		localRaw := e.drainMempool()
-		selfList, _ := e.buildCandidateList(epoch, localRaw, epochSnap)
+		selfList, _ := e.buildCandidateList(epoch, epochSnap)
 
 		// Broadcast once at epoch close
 		e.broadcastCandidates(epoch, selfList)
@@ -728,9 +725,6 @@ func (e *Engine) loop(ctx context.Context) {
 
 		if present < required {
 			log.Printf("epoch %d skipped: presence %d/%d (<60%%); will retry next epoch", epoch, present, expected)
-
-			// Keep local txs so our candidate list can be rebuilt next epoch.
-			e.requeueMempool(localRaw)
 
 			epoch++
 			continue
@@ -893,7 +887,7 @@ func (e *Engine) loop(ctx context.Context) {
 			}
 		}
 
-		// Cleanup mempool: delete losers + delete accepted-but-failed-apply
+		// Cleanup: delete losers + delete accepted-but-failed-apply
 		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied)
 
 		// --- Finalization (checkpoint anchor) ---
@@ -1007,33 +1001,9 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 	return snap, err
 }
 
-func (e *Engine) drainMempool() [][]byte {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	out := e.mempool
-	e.mempool = make([][]byte, 0, 1024)
-	return out
-}
-
-func (e *Engine) requeueMempool(raws [][]byte) {
-	if len(raws) == 0 {
-		return
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Prepend, so txs that were already seen get retried first.
-	rebuilt := make([][]byte, 0, len(raws))
-	for _, r := range raws {
-		rebuilt = append(rebuilt, append([]byte(nil), r...))
-	}
-	e.mempool = append(rebuilt, e.mempool...)
-}
-
 // buildCandidateListV2 builds a txid-only candidate list ("votes").
 // It ignores raws and uses e.approved (one tx per conflict key).
-func (e *Engine) buildCandidateList(epoch uint64, raws [][]byte, snap *Snapshot) (*CandidateList, [][32]byte) {
-	_ = raws
+func (e *Engine) buildCandidateList(epoch uint64, snap *Snapshot) (*CandidateList, [][32]byte) {
 	_ = snap
 
 	e.mu.Lock()
@@ -1328,9 +1298,6 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 	// - Keep txs seen AFTER the boundary (seenEpoch > epoch). Those belong to the next epoch
 	//   and have not been decided yet (so it's not a retry).
 	// - Also drop any accepted-but-failed-applied txs to prevent "wins forever" loops.
-
-	// 0) Always clear the raw inbound mempool buffer for the next epoch window
-	e.mempool = make([][]byte, 0, 1024)
 
 	// If maps are nil, just clear per-epoch caches
 	if e.txSeenEpoch == nil {

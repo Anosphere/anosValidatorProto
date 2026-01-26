@@ -131,7 +131,6 @@ func (e *Engine) runResync(ctx context.Context) error {
 
 	// Clear volatile in-memory pools (we've rebuilt canonical state).
 	e.mu.Lock()
-	e.mempool = make([][]byte, 0, 1024)
 	e.txPool = make(map[[32]byte][]byte)
 	e.txSeenEpoch = make(map[[32]byte]uint64)
 	e.conflictPool = make(map[[32]byte][][32]byte)
