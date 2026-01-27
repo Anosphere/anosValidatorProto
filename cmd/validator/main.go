@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -180,7 +179,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
-		_ = writeProto(w, &pb.Pub32{V: selfID[:]})
+		_ = writeProtoDelim(w, &pb.Pub32{V: selfID[:]})
 	})
 
 	// POST /peer/candidates
@@ -195,7 +194,7 @@ func main() {
 			return
 		}
 		var cl pb.CandidateListV2
-		if err := readProto(r.Body, &cl); err != nil {
+		if err := readProtoDelim(r.Body, &cl); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -252,7 +251,7 @@ func main() {
 			return
 		}
 		var fin pb.EpochFinalization
-		if err := readProto(r.Body, &fin); err != nil {
+		if err := readProtoDelim(r.Body, &fin); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -286,7 +285,7 @@ func main() {
 			return
 		}
 		var inv pb.TxInv
-		if err := readProto(r.Body, &inv); err != nil {
+		if err := readProtoDelim(r.Body, &inv); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -320,7 +319,7 @@ func main() {
 		}
 
 		log.Printf("[net] rx /peer/tx/inv from=%x epoch=%d inv=%d want=%d", fromID[:4], inv.Epoch, len(inv.Txid), len(want.Txid))
-		writeProto(w, want)
+		_ = writeProtoDelim(w, want)
 	})
 
 	mux.HandleFunc("/peer/tx/push", func(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +328,7 @@ func main() {
 			return
 		}
 		var push pb.TxPush
-		if err := readProto(r.Body, &push); err != nil {
+		if err := readProtoDelim(r.Body, &push); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -365,7 +364,7 @@ func main() {
 			return
 		}
 		var want pb.TxWant
-		if err := readProto(r.Body, &want); err != nil {
+		if err := readProtoDelim(r.Body, &want); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -393,12 +392,12 @@ func main() {
 		}
 
 		log.Printf("[net] ok /peer/tx/get epoch=%d push=%d", out.Epoch, len(out.Tx))
-		writeProto(w, out)
+		_ = writeProtoDelim(w, out)
 	})
 
 	mux.HandleFunc("/sync/latest", func(w http.ResponseWriter, r *http.Request) {
 		latest := engine.LatestFinalizedEpoch()
-		writeProto(w, &pb.SyncLatestResponse{LatestEpoch: latest})
+		_ = writeProtoDelim(w, &pb.SyncLatestResponse{LatestEpoch: latest})
 	})
 
 	mux.HandleFunc("/sync/finalization", func(w http.ResponseWriter, r *http.Request) {
@@ -421,7 +420,7 @@ func main() {
 			}
 			resp.Finalizations = append(resp.Finalizations, &f)
 		}
-		writeProto(w, resp)
+		_ = writeProtoDelim(w, resp)
 	})
 
 	mux.HandleFunc("/sync/frontiers", func(w http.ResponseWriter, r *http.Request) {
@@ -459,7 +458,7 @@ func main() {
 		if next != nil {
 			resp.NextCursor = &pb.AccountId{V: next[:]}
 		}
-		writeProto(w, resp)
+		_ = writeProtoDelim(w, resp)
 	})
 
 	mux.HandleFunc("/sync/chain", func(w http.ResponseWriter, r *http.Request) {
@@ -468,7 +467,7 @@ func main() {
 			return
 		}
 		var req pb.SyncChainRequest
-		if err := readProto(r.Body, &req); err != nil {
+		if err := readProtoDelim(r.Body, &req); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -496,7 +495,7 @@ func main() {
 			}
 			resp.Tx = append(resp.Tx, tx)
 		}
-		writeProto(w, resp)
+		_ = writeProtoDelim(w, resp)
 	})
 
 	// ---- Public API endpoints (protobuf) ----
@@ -508,7 +507,7 @@ func main() {
 			return
 		}
 		var req pb.SubmitTxRequest
-		if err := readProto(r.Body, &req); err != nil {
+		if err := readProtoRaw(r.Body, &req); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -542,13 +541,13 @@ func main() {
 		if err := engine.SubmitTx(raw); err != nil {
 			resp.Error = &pb.ApiError{Code: 400, Message: "reject", Detail: err.Error()}
 			log.Printf("[api] reject /submit txid=%x err=%s", txid[:4], err.Error())
-			writeProtoResponse(w, resp)
+			_ = writeProtoRaw(w, resp)
 			return
 		}
 
 		resp.Txid = &pb.Hash32{V: txid[:]}
 		resp.Ok = true
-		writeProtoResponse(w, resp)
+		_ = writeProtoRaw(w, resp)
 	})
 
 	// POST /account : GetAccountRequest -> GetAccountResponse
@@ -558,7 +557,7 @@ func main() {
 			return
 		}
 		var req pb.GetAccountRequest
-		if err := readProto(r.Body, &req); err != nil {
+		if err := readProtoRaw(r.Body, &req); err != nil {
 			http.Error(w, "bad proto", 400)
 			log.Printf("BAD PROTO /account")
 			return
@@ -574,7 +573,7 @@ func main() {
 		resp := &pb.GetAccountResponse{Ok: false}
 		if err != nil {
 			resp.Error = &pb.ApiError{Code: 500, Message: "error", Detail: err.Error()}
-			writeProtoResponse(w, resp)
+			_ = writeProtoRaw(w, resp)
 			return
 		}
 
@@ -585,7 +584,7 @@ func main() {
 			Seq:     seq,
 		}
 		resp.Ok = true
-		writeProtoResponse(w, resp)
+		_ = writeProtoRaw(w, resp)
 	})
 
 	// POST /receivables : ListReceivablesRequest -> ListReceivablesResponse
@@ -595,7 +594,7 @@ func main() {
 			return
 		}
 		var req pb.ListReceivablesRequest
-		if err := readProto(r.Body, &req); err != nil {
+		if err := readProtoRaw(r.Body, &req); err != nil {
 			http.Error(w, "bad proto", 400)
 			return
 		}
@@ -610,7 +609,7 @@ func main() {
 		resp := &pb.ListReceivablesResponse{Ok: false}
 		if err != nil {
 			resp.Error = &pb.ApiError{Code: 500, Message: "error", Detail: err.Error()}
-			writeProtoResponse(w, resp)
+			_ = writeProtoRaw(w, resp)
 			return
 		}
 
@@ -627,7 +626,7 @@ func main() {
 
 		resp.Receivables = recs
 		resp.Ok = true
-		writeProtoResponse(w, resp)
+		_ = writeProtoRaw(w, resp)
 	})
 
 	// ---- Debug/DB endpoints (JSON) ----
@@ -687,15 +686,9 @@ func main() {
 
 }
 
-func writeProtoResponse(w http.ResponseWriter, msg proto.Message) {
-	_ = writeProtoRaw(w, msg)
-}
-
-func writeProto(w http.ResponseWriter, msg proto.Message) error {
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	_, err := protodelim.MarshalTo(w, msg)
-	return err
-}
+// ---------------- Proto helpers ----------------
+// Public API: RAW protobuf (no length prefix)
+// Peer API:  DELIMITED protobuf (varint length prefix)
 
 func writeProtoRaw(w http.ResponseWriter, msg proto.Message) error {
 	w.Header().Set("Content-Type", "application/x-protobuf")
@@ -707,23 +700,22 @@ func writeProtoRaw(w http.ResponseWriter, msg proto.Message) error {
 	return err
 }
 
-func readProto(r io.Reader, msg proto.Message) error {
+func readProtoRaw(r io.Reader, msg proto.Message) error {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
+	return proto.Unmarshal(b, msg)
+}
 
-	// 1) Try length-delimited (new format)
-	if err := protodelim.UnmarshalFrom(bufio.NewReader(bytes.NewReader(b)), msg); err == nil {
-		return nil
-	}
+func writeProtoDelim(w http.ResponseWriter, msg proto.Message) error {
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	_, err := protodelim.MarshalTo(w, msg)
+	return err
+}
 
-	// 2) Fallback to raw protobuf (old format)
-	if err := proto.Unmarshal(b, msg); err == nil {
-		return nil
-	}
-
-	return errors.New("bad proto")
+func readProtoDelim(r io.Reader, msg proto.Message) error {
+	return protodelim.UnmarshalFrom(bufio.NewReader(r), msg)
 }
 
 func splitCSV(s string) []string {
@@ -747,16 +739,4 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
-}
-
-func bytesEq(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
