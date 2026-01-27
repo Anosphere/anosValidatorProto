@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -559,6 +560,7 @@ func main() {
 		var req pb.GetAccountRequest
 		if err := readProto(r.Body, &req); err != nil {
 			http.Error(w, "bad proto", 400)
+			log.Printf("BAD PROTO /account")
 			return
 		}
 		if req.Account == nil || len(req.Account.V) != 32 {
@@ -686,8 +688,7 @@ func main() {
 }
 
 func writeProtoResponse(w http.ResponseWriter, msg proto.Message) {
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	_ = writeProto(w, msg)
+	_ = writeProtoRaw(w, msg)
 }
 
 func writeProto(w http.ResponseWriter, msg proto.Message) error {
@@ -696,9 +697,33 @@ func writeProto(w http.ResponseWriter, msg proto.Message) error {
 	return err
 }
 
+func writeProtoRaw(w http.ResponseWriter, msg proto.Message) error {
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	b, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
+}
+
 func readProto(r io.Reader, msg proto.Message) error {
-	br := bufio.NewReader(r)
-	return protodelim.UnmarshalFrom(br, msg)
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+
+	// 1) Try length-delimited (new format)
+	if err := protodelim.UnmarshalFrom(bufio.NewReader(bytes.NewReader(b)), msg); err == nil {
+		return nil
+	}
+
+	// 2) Fallback to raw protobuf (old format)
+	if err := proto.Unmarshal(b, msg); err == nil {
+		return nil
+	}
+
+	return errors.New("bad proto")
 }
 
 func splitCSV(s string) []string {
