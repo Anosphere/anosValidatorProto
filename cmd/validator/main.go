@@ -280,6 +280,8 @@ func main() {
 	})
 
 	mux.HandleFunc("/peer/tx/inv", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("INV CALLED")
+
 		if r.Method != "POST" {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -589,6 +591,8 @@ func main() {
 
 	// POST /receivables : ListReceivablesRequest -> ListReceivablesResponse
 	mux.HandleFunc("/receivables", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("RECEIVABLES")
+
 		if r.Method != "POST" {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
