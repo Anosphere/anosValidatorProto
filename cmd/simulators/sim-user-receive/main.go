@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,24 @@ import (
 )
 
 func main() {
+	targetRIDHex := flag.String(
+		"targetRID",
+		"",
+		"Receivable ID (hex-encoded)",
+	)
+	flag.Parse()
+
+	if *targetRIDHex == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: --targetRID is required")
+		os.Exit(1)
+	}
+
+	targetRID, err := hex.DecodeString(*targetRIDHex)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: invalid hex for --targetRID:", err)
+		os.Exit(1)
+	}
+
 	validatorUrlList := splitCSV(getenv("VALIDATOR_URL_LIST", ""))
 
 	baseURL := validatorUrlList[0]
@@ -28,57 +47,14 @@ func main() {
 	pollEvery := 200 * time.Millisecond
 	maxWait := 30 * time.Second
 
-	// Generate Alice/Bob keys (AccountId == pubkey bytes)
-
-	alPriv, _ := hex.DecodeString(getenv("GENESIS_PRIVATE_KEY", ""))
 	boPriv, _ := hex.DecodeString(getenv("USER_PRIVATE_KEY", ""))
 
-	alHex := getenv("GENESIS_HEX", "")
 	boHex := getenv("USER_HEX", "")
 
-	alPub, _ := hex.DecodeString(alHex)
 	boPub, _ := hex.DecodeString(boHex)
 
-	fmt.Println("Alice:", alHex)
 	fmt.Println("Bob  :", boHex)
 
-	// Fetch Alice state
-	alState := mustGetAccount(baseURL, alPub)
-
-	// Set Amount to Send
-	amount := uint64(1000000 * core.UnitsPerAnos)
-
-	// Calculate Fee
-	fee := core.ExpectedFee(amount)
-
-	// Build SEND tx from Alice to Bob
-	send := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_SEND,
-		Account: &pb.AccountId{V: alPub},
-		Prev:    &pb.Hash32{V: alState.Head.GetV()},
-		Seq:     alState.Seq + 1,
-		Body: &pb.Tx_Send{Send: &pb.TxBodySend{
-			To:     &pb.AccountId{V: boPub},
-			Amount: amount,
-			Fee:    fee,
-			// ReceivableId may be set after txid derivation, but is NOT part of signing bytes for SEND.
-		}},
-	}
-	signTx(send, alPriv)
-
-	// Derive txid + expected receivable_id (for display; validators compute)
-	txid, _ := crypto.TxID(send)
-	rid := crypto.ReceivableIDFromTxID(txid)
-	// Client MAY set it (validators require match). Optional:
-	send.GetSend().ReceivableId = &pb.Hash32{V: rid[:]}
-
-	mustSubmit(baseURL, send)
-
-	fmt.Println("Sent txid:", hex.EncodeToString(txid[:]))
-	fmt.Println("Receivable:", hex.EncodeToString(rid[:]))
-
-	// Poll until Bob sees the receivable (meaning SEND committed at epoch close)
-	targetRID := waitForReceivable(baseURL, boPub, rid[:], pollEvery, maxWait)
 	fmt.Println("Bob receivable id:", hex.EncodeToString(targetRID))
 
 	// Fetch Bob state
@@ -100,7 +76,6 @@ func main() {
 	waitForSeqAtLeast(baseURL, boPub, boState.Seq+1, pollEvery, maxWait)
 
 	// Print final states
-	_ = mustGetAccount(baseURL, alPub)
 	_ = mustGetAccount(baseURL, boPub)
 	fmt.Println("Done.")
 }

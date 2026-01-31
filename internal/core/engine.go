@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/bits"
 	"net/http"
 	"sort"
 	"strings"
@@ -57,6 +58,7 @@ type Engine struct {
 	conflictPool  map[[32]byte][][32]byte // keyHash -> txids (all conflict candidates we’ve seen)
 	approved      map[[32]byte][32]byte   // keyHash -> txid we “approve” this epoch
 	gossipPending map[[32]byte]struct{}   // txids to announce on next gossip tick
+	gossipMask    map[[32]byte]uint64     // txid -> bitmask of peers that have it via push/want(ack)
 
 	peerFinals map[uint64]map[[33]byte]*pb.EpochFinalization // epoch -> signer -> fin
 
@@ -133,7 +135,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 }
 
 func (e *Engine) Start(ctx context.Context) {
-	e.startOnce.Do(func() { go e.loop(ctx) })
+	e.startOnce.Do(func() {
+		go e.loop(ctx)
+		go e.gossipLoop(ctx)
+	})
 }
 
 // SubmitTx enqueues raw tx bytes for this epoch; it only checks signature and basic parse.
@@ -186,6 +191,12 @@ func (e *Engine) SubmitTx(raw []byte) error {
 		e.gossipPending = make(map[[32]byte]struct{})
 	}
 	e.gossipPending[txid] = struct{}{}
+	if e.gossipMask == nil {
+		e.gossipMask = make(map[[32]byte]uint64)
+	}
+	if _, ok := e.gossipMask[txid]; !ok {
+		e.gossipMask[txid] = 0
+	}
 
 	if e.conflictPool == nil {
 		e.conflictPool = make(map[[32]byte][][32]byte)
@@ -195,10 +206,12 @@ func (e *Engine) SubmitTx(raw []byte) error {
 	}
 
 	if key, ok := conflictKeyHash(tx); ok {
-		// store candidate
 		e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
-		// set approval if unset
-		if _, exists := e.approved[key]; !exists {
+
+		// Deterministic approval: lowest txid wins for this conflict key.
+		if cur, exists := e.approved[key]; !exists {
+			e.approved[key] = txid
+		} else if bytes.Compare(txid[:], cur[:]) < 0 {
 			e.approved[key] = txid
 		}
 	}
@@ -421,6 +434,16 @@ func (e *Engine) ReceiveGossipedTx(raw []byte) error {
 	} else {
 		e.txPool[txid] = append([]byte(nil), raw...)
 	}
+	if e.gossipPending == nil {
+		e.gossipPending = make(map[[32]byte]struct{})
+	}
+	e.gossipPending[txid] = struct{}{}
+	if e.gossipMask == nil {
+		e.gossipMask = make(map[[32]byte]uint64)
+	}
+	if _, ok := e.gossipMask[txid]; !ok {
+		e.gossipMask[txid] = 0
+	}
 	if e.conflictPool == nil {
 		e.conflictPool = make(map[[32]byte][][32]byte)
 	}
@@ -429,7 +452,11 @@ func (e *Engine) ReceiveGossipedTx(raw []byte) error {
 	}
 	if key, ok := conflictKeyHash(tx); ok {
 		e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
-		if _, exists := e.approved[key]; !exists {
+
+		// Deterministic approval: lowest txid wins for this conflict key.
+		if cur, exists := e.approved[key]; !exists {
+			e.approved[key] = txid
+		} else if bytes.Compare(txid[:], cur[:]) < 0 {
 			e.approved[key] = txid
 		}
 	}
@@ -888,7 +915,8 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		// Cleanup: delete losers + delete accepted-but-failed-apply
-		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied)
+		postSnap, _ := e.buildSnapshot()
+		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
 
 		// --- Finalization (checkpoint anchor) ---
 		acceptedIDs := make([][32]byte, 0, len(winners))
@@ -956,6 +984,232 @@ func (e *Engine) loop(ctx context.Context) {
 			}
 		}
 		// --- end finalization ---
+	}
+}
+
+// gossipLoop periodically advertises pending txids to peers (INV) and, when requested, delivers
+// full transactions (PUSH). Gossip is considered "done" for a tx once it has been delivered to a
+// majority of our configured peers (not counting self).
+//
+// This is intentionally memory-only. If a validator restarts or the pool is cleaned before peers
+// fetch/push occurs, bytes may be lost; the majority threshold reduces the probability of that.
+func (e *Engine) gossipLoop(ctx context.Context) {
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			e.flushGossipOnce(ctx)
+		}
+	}
+}
+
+func (e *Engine) flushGossipOnce(ctx context.Context) {
+	if len(e.cfg.Peers) == 0 {
+		return
+	}
+
+	// Majority of peers (excluding self): floor(n/2)+1
+	need := (len(e.cfg.Peers) / 2) + 1
+	if need < 1 {
+		need = 1
+	}
+
+	type peerBatch struct {
+		idx int
+		url string
+		ids [][32]byte
+	}
+
+	var batches []peerBatch
+
+	e.mu.Lock()
+	if len(e.gossipPending) == 0 {
+		e.mu.Unlock()
+		return
+	}
+	if e.gossipMask == nil {
+		e.gossipMask = make(map[[32]byte]uint64)
+	}
+
+	// Bound per-tick so protobufs don’t explode.
+	const maxTick = 300
+	pending := make([][32]byte, 0, minInt(len(e.gossipPending), maxTick))
+	for id := range e.gossipPending {
+		pending = append(pending, id)
+		if len(pending) >= maxTick {
+			break
+		}
+	}
+
+	// Pre-prune txids that already reached majority.
+	for _, id := range pending {
+		if bits.OnesCount64(e.gossipMask[id]) >= need {
+			delete(e.gossipPending, id)
+			delete(e.gossipMask, id)
+		}
+	}
+
+	// Rebuild pending after prune.
+	pending = pending[:0]
+	for id := range e.gossipPending {
+		pending = append(pending, id)
+		if len(pending) >= maxTick {
+			break
+		}
+	}
+
+	if len(pending) == 0 {
+		e.mu.Unlock()
+		return
+	}
+
+	// Per-peer selection: only txids not yet acked by that peer.
+	for i, peer := range e.cfg.Peers {
+		if i >= 63 {
+			break // bitmask limitation
+		}
+		peer = strings.TrimRight(peer, "/")
+		bit := uint64(1) << uint(i)
+
+		ids := make([][32]byte, 0, len(pending))
+		for _, id := range pending {
+			if (e.gossipMask[id] & bit) == 0 {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		batches = append(batches, peerBatch{idx: i, url: peer, ids: ids})
+	}
+	e.mu.Unlock()
+
+	if len(batches) == 0 {
+		return
+	}
+
+	// Fanout concurrently with a small cap.
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, b := range batches {
+		b := b
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			e.gossipToPeer(ctx, b.idx, b.url, b.ids, need)
+		}()
+	}
+	wg.Wait()
+}
+
+func (e *Engine) gossipToPeer(ctx context.Context, peerIdx int, peerURL string, ids [][32]byte, need int) {
+	if len(ids) == 0 || peerIdx < 0 || peerIdx >= 63 {
+		return
+	}
+	bit := uint64(1) << uint(peerIdx)
+
+	epoch := e.epochNow()
+	vid := e.cfg.Signer.PublicKeyCompressed()
+
+	inv := &pb.TxInv{Epoch: epoch, From: &pb.Pub32{V: vid[:]}}
+	for _, id := range ids {
+		inv.Txid = append(inv.Txid, &pb.Hash32{V: id[:]})
+	}
+
+	var invBuf bytes.Buffer
+	_, _ = protodelim.MarshalTo(&invBuf, inv)
+
+	req, _ := http.NewRequestWithContext(ctx, "POST", peerURL+"/peer/tx/inv", &invBuf)
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	resp, err := e.cfg.HTTPClient.Do(req)
+	if err != nil || resp == nil {
+		return
+	}
+
+	var want pb.TxWant
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return
+		}
+		br := bufio.NewReader(resp.Body)
+		_ = protodelim.UnmarshalFrom(br, &want)
+	}()
+
+	// If peer wants nothing, treat as ACK for everything we advertised.
+	acked := make([][32]byte, 0, len(ids))
+	if len(want.Txid) == 0 {
+		acked = append(acked, ids...)
+		e.recordGossipAck(bit, need, acked)
+		return
+	}
+
+	// Build PUSH with only wanted txs.
+	push := &pb.TxPush{Epoch: epoch, From: &pb.Pub32{V: vid[:]}}
+	for _, h := range want.Txid {
+		if h == nil || len(h.V) != 32 {
+			continue
+		}
+		var txid [32]byte
+		copy(txid[:], h.V)
+
+		raw := e.GetTxBytes(txid)
+		if len(raw) == 0 {
+			continue
+		}
+		tx, err := ParseTx(raw)
+		if err != nil {
+			continue
+		}
+		push.Tx = append(push.Tx, tx)
+		acked = append(acked, txid)
+	}
+	if len(push.Tx) == 0 {
+		return
+	}
+
+	var pushBuf bytes.Buffer
+	_, _ = protodelim.MarshalTo(&pushBuf, push)
+
+	req2, _ := http.NewRequestWithContext(ctx, "POST", peerURL+"/peer/tx/push", &pushBuf)
+	req2.Header.Set("Content-Type", "application/x-protobuf")
+	resp2, err := e.cfg.HTTPClient.Do(req2)
+	if err != nil || resp2 == nil {
+		return
+	}
+	func() {
+		defer resp2.Body.Close()
+		if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
+			acked = nil
+		}
+	}()
+	if len(acked) == 0 {
+		return
+	}
+
+	e.recordGossipAck(bit, need, acked)
+}
+
+func (e *Engine) recordGossipAck(bit uint64, need int, acked [][32]byte) {
+	if len(acked) == 0 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.gossipMask == nil {
+		e.gossipMask = make(map[[32]byte]uint64)
+	}
+	for _, id := range acked {
+		e.gossipMask[id] |= bit
+		if e.gossipPending != nil && bits.OnesCount64(e.gossipMask[id]) >= need {
+			delete(e.gossipPending, id)
+			delete(e.gossipMask, id)
+		}
 	}
 }
 
@@ -1228,6 +1482,8 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 		return
 	}
 
+	log.Printf("Fetching missing transactions")
+
 	for _, peer := range e.cfg.Peers {
 		peer = strings.TrimRight(peer, "/")
 
@@ -1288,7 +1544,12 @@ func (e *Engine) epochNow() uint64 {
 	return e.epochAtUnixMs(time.Now().UnixMilli())
 }
 
-func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{}, failedApplied map[[32]byte]error) {
+func (e *Engine) cleanupAfterEpoch(
+	epoch uint64,
+	accepted map[[32]byte]struct{},
+	failedApplied map[[32]byte]error,
+	postSnap *Snapshot,
+) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -1320,6 +1581,9 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 			if e.gossipPending != nil {
 				delete(e.gossipPending, txid)
 			}
+			if e.gossipMask != nil {
+				delete(e.gossipMask, txid)
+			}
 		}
 	}
 
@@ -1332,6 +1596,9 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 		if e.gossipPending != nil {
 			delete(e.gossipPending, txid)
 		}
+		if e.gossipMask != nil {
+			delete(e.gossipMask, txid)
+		}
 	}
 
 	// Drop applied txs no matter when they were "seen", to avoid re-advertising.
@@ -1343,9 +1610,14 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 		if e.gossipPending != nil {
 			delete(e.gossipPending, txid)
 		}
+		if e.gossipMask != nil {
+			delete(e.gossipMask, txid)
+		}
 	}
 
-	// 3) Rebuild conflictPool + approved from remaining txPool (these are next-epoch txs only)
+	// 3) Rebuild conflictPool + approved from remaining txPool,
+	// but FIRST prune carry-over txs using post-commit snapshot tip rules:
+	// carry only if prev==head AND seq==headSeq+1 (no pipelining).
 	e.conflictPool = make(map[[32]byte][][32]byte)
 	e.approved = make(map[[32]byte][32]byte)
 
@@ -1355,11 +1627,61 @@ func (e *Engine) cleanupAfterEpoch(epoch uint64, accepted map[[32]byte]struct{},
 			// malformed; drop it
 			delete(e.txPool, txid)
 			delete(e.txSeenEpoch, txid)
+			if e.gossipPending != nil {
+				delete(e.gossipPending, txid)
+			}
+			if e.gossipMask != nil {
+				delete(e.gossipMask, txid)
+			}
 			continue
 		}
+
+		// Must have account/prev to evaluate carry rule
+		if tx.Account == nil || len(tx.Account.V) != 32 || tx.Prev == nil || len(tx.Prev.V) != 32 {
+			delete(e.txPool, txid)
+			delete(e.txSeenEpoch, txid)
+			if e.gossipPending != nil {
+				delete(e.gossipPending, txid)
+			}
+			if e.gossipMask != nil {
+				delete(e.gossipMask, txid)
+			}
+			continue
+		}
+
+		var acct [32]byte
+		copy(acct[:], tx.Account.V)
+
+		var prev [32]byte
+		copy(prev[:], tx.Prev.V)
+
+		// Unknown account defaults to zero head/seq.
+		as, ok := postSnap.Accounts[acct]
+		if !ok {
+			as = AccountSnap{}
+		}
+
+		// Carry rule: prev==current head AND seq==current seq + 1
+		if prev != as.Head || tx.Seq != as.Seq+1 {
+			delete(e.txPool, txid)
+			delete(e.txSeenEpoch, txid)
+			if e.gossipPending != nil {
+				delete(e.gossipPending, txid)
+			}
+			if e.gossipMask != nil {
+				delete(e.gossipMask, txid)
+			}
+			continue
+		}
+
+		// Keep it: rebuild conflict structures for next epoch
 		if key, ok := conflictKeyHash(tx); ok {
 			e.conflictPool[key] = appendUnique32(e.conflictPool[key], txid)
-			if _, exists := e.approved[key]; !exists {
+
+			// Deterministic approval: lowest txid wins
+			if cur, exists := e.approved[key]; !exists {
+				e.approved[key] = txid
+			} else if bytes.Compare(txid[:], cur[:]) < 0 {
 				e.approved[key] = txid
 			}
 		}
