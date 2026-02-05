@@ -42,6 +42,9 @@ validator*.db
 *.pem
 *.seed
 *.secret
+private.csv
+public.csv
+RIDLIST.csv
 
 # NEVER commit validator seed
 *VALIDATOR_SEED*
