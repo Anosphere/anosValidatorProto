@@ -6,8 +6,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -21,56 +23,126 @@ import (
 
 func main() {
 	validatorUrlList := splitCSV(getenv("VALIDATOR_URL_LIST", ""))
+	baseURL := validatorUrlList[0]
 
-	baseURL := validatorUrlList[2]
-
-	// Generate Alice/Bob keys (AccountId == pubkey bytes)
-
+	// Alice keys (AccountId == pubkey bytes)
 	alPriv, _ := hex.DecodeString(getenv("GENESIS_PRIVATE_KEY", ""))
-
 	alHex := getenv("GENESIS_HEX", "")
-	boHex := getenv("USER_HEX", "")
-
 	alPub, _ := hex.DecodeString(alHex)
-	boPub, _ := hex.DecodeString(boHex)
 
 	fmt.Println("Alice:", alHex)
-	fmt.Println("Bob  :", boHex)
 
-	// Fetch Alice state
-	alState := mustGetAccount(baseURL, alPub)
+	// Get recipient list:
+	userHexesCSV := flag.String("userHexes", "", "CSV of 50 USER_HEX values (hex pubkeys)")
+	flag.Parse()
 
-	// Set Amount to Send
-	amount := uint64(1000000 * core.UnitsPerAnos)
+	if *userHexesCSV == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: --userHexes is required")
+		os.Exit(1)
+	}
 
-	// Calculate Fee
+	var userHexList []string
+
+	if strings.HasSuffix(*userHexesCSV, ".csv") {
+		data, err := os.ReadFile(*userHexesCSV)
+		if err != nil {
+			panic(err)
+		}
+		userHexList = splitCSV(strings.ReplaceAll(string(data), "\n", ","))
+	} else {
+		userHexList = splitCSV(*userHexesCSV)
+	}
+
+	log.Print((userHexList))
+
+	const recipientCount = 50
+	recipients := make([][]byte, 0, recipientCount)
+
+	for _, h := range userHexList {
+		b, err := hex.DecodeString(strings.TrimSpace(h))
+		if err != nil {
+			panic(fmt.Sprintf("bad USER_HEX_LIST entry %q: %v", h, err))
+		}
+		recipients = append(recipients, b)
+		if len(recipients) >= recipientCount {
+			break
+		}
+	}
+
+	// Print recipients so you can reuse them / verify.
+	fmt.Println("Recipients (hex pubkeys):")
+	for i := 0; i < recipientCount; i++ {
+		fmt.Printf("  [%02d] %s\n", i, hex.EncodeToString(recipients[i]))
+	}
+
+	// Amount + fee
+	amount := uint64(100 * core.UnitsPerAnos)
 	fee := core.ExpectedFee(amount)
 
-	// Build SEND tx from Alice to Bob
-	send := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_SEND,
-		Account: &pb.AccountId{V: alPub},
-		Prev:    &pb.Hash32{V: alState.Head.GetV()},
-		Seq:     alState.Seq + 1,
-		Body: &pb.Tx_Send{Send: &pb.TxBodySend{
-			To:     &pb.AccountId{V: boPub},
-			Amount: amount,
-			Fee:    fee,
-			// ReceivableId may be set after txid derivation, but is NOT part of signing bytes for SEND.
-		}},
+	// Get Alice state once; we’ll refresh each iteration after submit.
+	alState := mustGetAccount(baseURL, alPub)
+
+	// Collect all receivable IDs in order
+	rids := make([][32]byte, 0, recipientCount)
+
+	for i := 0; i < recipientCount; i++ {
+		toPub := recipients[i]
+
+		// Build SEND tx from Alice to recipient
+		send := &pb.Tx{
+			Type:    pb.TxType_TX_TYPE_SEND,
+			Account: &pb.AccountId{V: alPub},
+			Prev:    &pb.Hash32{V: alState.Head.GetV()},
+			Seq:     alState.Seq + 1,
+			Body: &pb.Tx_Send{Send: &pb.TxBodySend{
+				To:     &pb.AccountId{V: toPub},
+				Amount: amount,
+				Fee:    fee,
+			}},
+		}
+		signTx(send, alPriv)
+
+		// Derive txid + expected receivable_id (optional client-set)
+		txid, _ := crypto.TxID(send)
+		rid := crypto.ReceivableIDFromTxID(txid)
+		send.GetSend().ReceivableId = &pb.Hash32{V: rid[:]}
+
+		// Store rid (so we can print them all at the end)
+		rids = append(rids, rid)
+
+		// Submit
+		mustSubmit(baseURL, send)
+
+		fmt.Printf("Send %02d OK  to=%s  txid=%s  rid=%s\n",
+			i,
+			hex.EncodeToString(toPub)[:16],
+			hex.EncodeToString(txid[:])[:16],
+			hex.EncodeToString(rid[:])[:16],
+		)
+
+		// Wait until Alice seq is reflected, then refresh head/seq for the next tx.
+		waitForSeqAtLeast(baseURL, alPub, send.Seq, 200*time.Millisecond, 30*time.Second)
+		alState = mustGetAccount(baseURL, alPub)
+
+		// Delay between sends (not after the last one)
+		if i != recipientCount-1 {
+			time.Sleep(1 * time.Second)
+		}
 	}
-	signTx(send, alPriv)
 
-	// Derive txid + expected receivable_id (for display; validators compute)
-	txid, _ := crypto.TxID(send)
-	rid := crypto.ReceivableIDFromTxID(txid)
-	// Client MAY set it (validators require match). Optional:
-	send.GetSend().ReceivableId = &pb.Hash32{V: rid[:]}
+	// ---- Print all receivable IDs (end) ----
+	fmt.Println("\nAll receivableIds (index -> hex):")
+	for i, rid := range rids {
+		fmt.Printf("  [%02d] %s\n", i, hex.EncodeToString(rid[:]))
+	}
 
-	mustSubmit(baseURL, send)
-
-	fmt.Println("Sent txid:", hex.EncodeToString(txid[:]))
-	fmt.Println("Receivable:", hex.EncodeToString(rid[:]))
+	// Also print as a CSV (useful for feeding into the receive50 tool)
+	csvParts := make([]string, 0, len(rids))
+	for _, rid := range rids {
+		csvParts = append(csvParts, hex.EncodeToString(rid[:]))
+	}
+	fmt.Println("\nRID_LIST (CSV):")
+	fmt.Println(strings.Join(csvParts, ","))
 }
 
 func signTx(tx *pb.Tx, priv ed25519.PrivateKey) {
