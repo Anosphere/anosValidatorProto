@@ -191,6 +191,10 @@ func (e *Engine) SubmitTx(raw []byte) error {
 		e.gossipPending = make(map[[32]byte]struct{})
 	}
 	e.gossipPending[txid] = struct{}{}
+
+	// temp log
+	log.Printf("[tx] submit-pool txid=%x epoch=%d wallMs=%d", txid[:4], seen, time.Now().UnixMilli())
+
 	if e.gossipMask == nil {
 		e.gossipMask = make(map[[32]byte]uint64)
 	}
@@ -726,10 +730,13 @@ func (e *Engine) loop(ctx context.Context) {
 		}
 
 		// Close: build our candidate list from txs received during this epoch window.
+		log.Printf("[epoch=%d] phase:candidates-start wallMs=%d poolSize=%d approvedSize=%d", epoch, time.Now().UnixMilli(), len(e.txPool), len(e.approved))
 		selfList, _ := e.buildCandidateList(epoch, epochSnap)
+		log.Printf("[epoch=%d] phase:candidates-built txids=%d wallMs=%d", epoch, len(selfList.TxIDs), time.Now().UnixMilli())
 
 		// Broadcast once at epoch close
 		e.broadcastCandidates(epoch, selfList)
+		log.Printf("[epoch=%d] phase:candidates-broadcast-done wallMs=%d", epoch, time.Now().UnixMilli())
 
 		// Wait a small skew for peers to arrive
 		select {
@@ -738,6 +745,7 @@ func (e *Engine) loop(ctx context.Context) {
 		case <-time.After(e.cfg.CandidatesSkew):
 		}
 
+		log.Printf("[epoch=%d] phase:skew-done wallMs=%d", epoch, time.Now().UnixMilli())
 		peerLists := e.getPeerLists(epoch)
 
 		// --- Presence quorum gate (liveness) ---
@@ -898,7 +906,9 @@ func (e *Engine) loop(ctx context.Context) {
 			acceptedSet[txid] = struct{}{}
 		}
 
+		log.Printf("[epoch=%d] phase:apply-start winners=%d validTxs=%d wallMs=%d", epoch, len(winners), len(validParsed), time.Now().UnixMilli())
 		_, failedApplied, aerr := e.applyWinners(winners, txBytesByID, validParsed)
+		log.Printf("[epoch=%d] phase:apply-done failed=%d wallMs=%d", epoch, len(failedApplied), time.Now().UnixMilli())
 		if aerr != nil {
 			e.elog(epoch, "apply error: %v", aerr)
 		}
@@ -916,7 +926,9 @@ func (e *Engine) loop(ctx context.Context) {
 
 		// Cleanup: delete losers + delete accepted-but-failed-apply
 		postSnap, _ := e.buildSnapshot()
+		log.Printf("[epoch=%d] phase:cleanup-start txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
 		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
+		log.Printf("[epoch=%d] phase:cleanup-done txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
 
 		// --- Finalization (checkpoint anchor) ---
 		acceptedIDs := make([][32]byte, 0, len(winners))
@@ -955,7 +967,9 @@ func (e *Engine) loop(ctx context.Context) {
 					}
 
 					// broadcast to peers
+					log.Printf("[epoch=%d] phase:fin-broadcast-start wallMs=%d", epoch, time.Now().UnixMilli())
 					e.broadcastFinalization(fin)
+					log.Printf("[epoch=%d] phase:fin-broadcast-done wallMs=%d", epoch, time.Now().UnixMilli())
 
 					// allow some skew to receive peers’ finalizations (peers must finish apply first)
 					select {
@@ -963,6 +977,7 @@ func (e *Engine) loop(ctx context.Context) {
 						return
 					case <-time.After(e.cfg.FinalizationSkew):
 					}
+					log.Printf("[epoch=%d] phase:fin-skew-done wallMs=%d", epoch, time.Now().UnixMilli())
 
 					// quorum check (log-only for now; later this triggers resync)
 					qAccepted, qRoot, qCount, qNeed := e.finalizationQuorum(epoch)
@@ -1010,6 +1025,8 @@ func (e *Engine) flushGossipOnce(ctx context.Context) {
 	if len(e.cfg.Peers) == 0 {
 		return
 	}
+
+	log.Printf("[gossip] tick wallMs=%d", time.Now().UnixMilli())
 
 	// Majority of peers (excluding self): floor(n/2)+1
 	need := (len(e.cfg.Peers) / 2) + 1
@@ -1091,7 +1108,11 @@ func (e *Engine) flushGossipOnce(ctx context.Context) {
 		return
 	}
 
-	// Fanout concurrently with a small cap.
+	totalIds := 0
+	for _, b := range batches {
+		totalIds += len(b.ids)
+	}
+	log.Printf("[gossip] flushing batches=%d totalIds=%d wallMs=%d", len(batches), totalIds, time.Now().UnixMilli())
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for _, b := range batches {
@@ -1111,6 +1132,8 @@ func (e *Engine) gossipToPeer(ctx context.Context, peerIdx int, peerURL string, 
 	if len(ids) == 0 || peerIdx < 0 || peerIdx >= 63 {
 		return
 	}
+	gossipStart := time.Now().UnixMilli()
+	log.Printf("[gossip] peer=%s ids=%d start wallMs=%d", peerURL, len(ids), gossipStart)
 	bit := uint64(1) << uint(peerIdx)
 
 	epoch := e.epochNow()
@@ -1189,9 +1212,11 @@ func (e *Engine) gossipToPeer(ctx context.Context, peerIdx int, peerURL string, 
 		}
 	}()
 	if len(acked) == 0 {
+		log.Printf("[gossip] peer=%s acked=0 done wallMs=%d (elapsed=%dms)", peerURL, time.Now().UnixMilli(), time.Now().UnixMilli()-gossipStart)
 		return
 	}
 
+	log.Printf("[gossip] peer=%s acked=%d done wallMs=%d (elapsed=%dms)", peerURL, len(acked), time.Now().UnixMilli(), time.Now().UnixMilli()-gossipStart)
 	e.recordGossipAck(bit, need, acked)
 }
 
