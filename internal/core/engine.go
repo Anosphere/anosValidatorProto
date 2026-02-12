@@ -1505,9 +1505,22 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 		return
 	}
 
-	log.Printf("Fetching missing transactions")
+	log.Printf("Fetching missing transactions: need=%d", len(missing))
+
+	resolved := make(map[[32]byte]struct{})
 
 	for _, peer := range e.cfg.Peers {
+		// Build list of still-missing txids
+		var still [][32]byte
+		for _, id := range missing {
+			if _, ok := resolved[id]; !ok {
+				still = append(still, id)
+			}
+		}
+		if len(still) == 0 {
+			break
+		}
+
 		peer = strings.TrimRight(peer, "/")
 
 		vid := e.cfg.Signer.PublicKeyCompressed()
@@ -1515,7 +1528,7 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 			Epoch: epoch,
 			From:  &pb.Pub32{V: vid[:]},
 		}
-		for _, id := range missing {
+		for _, id := range still {
 			want.Txid = append(want.Txid, &pb.Hash32{V: id[:]})
 		}
 
@@ -1526,6 +1539,7 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 		req.Header.Set("Content-Type", "application/x-protobuf")
 		resp, err := e.cfg.HTTPClient.Do(req)
 		if err != nil || resp == nil {
+			log.Printf("fetchMissingTxs: peer=%s error: %v", peer, err)
 			continue
 		}
 
@@ -1546,12 +1560,15 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 				if err != nil {
 					continue
 				}
-				_ = e.ReceiveGossipedTx(raw)
+				if err := e.ReceiveGossipedTx(raw); err == nil {
+					txid, _ := crypto.TxID(tx)
+					resolved[txid] = struct{}{}
+				}
 			}
 		}()
-
-		return
 	}
+
+	log.Printf("fetchMissingTxs: resolved=%d/%d", len(resolved), len(missing))
 }
 
 func (e *Engine) epochAtUnixMs(nowMs int64) uint64 {
