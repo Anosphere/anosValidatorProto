@@ -1026,8 +1026,6 @@ func (e *Engine) flushGossipOnce(ctx context.Context) {
 		return
 	}
 
-	log.Printf("[gossip] tick wallMs=%d", time.Now().UnixMilli())
-
 	// Majority of peers (excluding self): floor(n/2)+1
 	need := (len(e.cfg.Peers) / 2) + 1
 	if need < 1 {
