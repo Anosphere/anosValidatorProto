@@ -1505,11 +1505,11 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 		return
 	}
 
-	log.Printf("Fetching missing transactions: need=%d", len(missing))
+	log.Printf("[fetch] starting: need=%d peers=%d", len(missing), len(e.cfg.Peers))
 
 	resolved := make(map[[32]byte]struct{})
 
-	for _, peer := range e.cfg.Peers {
+	for i, peer := range e.cfg.Peers {
 		// Build list of still-missing txids
 		var still [][32]byte
 		for _, id := range missing {
@@ -1518,10 +1518,12 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 			}
 		}
 		if len(still) == 0 {
+			log.Printf("[fetch] all resolved after %d peers", i)
 			break
 		}
 
 		peer = strings.TrimRight(peer, "/")
+		log.Printf("[fetch] trying peer=%s still_missing=%d", peer, len(still))
 
 		vid := e.cfg.Signer.PublicKeyCompressed()
 		want := &pb.TxWant{
@@ -1539,16 +1541,18 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 		req.Header.Set("Content-Type", "application/x-protobuf")
 		resp, err := e.cfg.HTTPClient.Do(req)
 		if err != nil || resp == nil {
-			log.Printf("fetchMissingTxs: peer=%s error: %v", peer, err)
+			log.Printf("[fetch] peer=%s failed: %v", peer, err)
 			continue
 		}
 
+		got := 0
 		func() {
 			defer resp.Body.Close()
 
 			var push pb.TxPush
 			br := bufio.NewReader(resp.Body)
 			if err := protodelim.UnmarshalFrom(br, &push); err != nil {
+				log.Printf("[fetch] peer=%s proto error: %v", peer, err)
 				return
 			}
 
@@ -1563,12 +1567,15 @@ func (e *Engine) fetchMissingTxs(epoch uint64, missing [][32]byte) {
 				if err := e.ReceiveGossipedTx(raw); err == nil {
 					txid, _ := crypto.TxID(tx)
 					resolved[txid] = struct{}{}
+					got++
 				}
 			}
 		}()
+
+		log.Printf("[fetch] peer=%s returned=%d resolved_so_far=%d/%d", peer, got, len(resolved), len(missing))
 	}
 
-	log.Printf("fetchMissingTxs: resolved=%d/%d", len(resolved), len(missing))
+	log.Printf("[fetch] done: resolved=%d/%d", len(resolved), len(missing))
 }
 
 func (e *Engine) epochAtUnixMs(nowMs int64) uint64 {
