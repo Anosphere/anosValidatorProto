@@ -705,6 +705,7 @@ func (e *Engine) loop(ctx context.Context) {
 		// Determine the current wall-clock epoch window.
 		epoch := uint64((nowMs-genesisMs)/epochMs) + 1
 		epochEndMs := genesisMs + int64(epoch)*epochMs
+		log.Printf("[epoch=%d] phase:epoch-calc wallMs=%d epochEndMs=%d gapMs=%d", epoch, nowMs, epochEndMs, epochEndMs-nowMs)
 
 		start := time.Now()
 		e.elog(epoch, " ----- Starting New Epoch ----- ")
@@ -747,6 +748,12 @@ func (e *Engine) loop(ctx context.Context) {
 
 		log.Printf("[epoch=%d] phase:skew-done wallMs=%d", epoch, time.Now().UnixMilli())
 		peerLists := e.getPeerLists(epoch)
+		for vid, cl := range peerLists {
+			log.Printf("[epoch=%d] phase:peer-list-received from=%x txids=%d", epoch, vid[:4], len(cl.TxIDs))
+		}
+		if len(peerLists) == 0 {
+			log.Printf("[epoch=%d] phase:peer-list-received NONE", epoch)
+		}
 
 		// --- Presence quorum gate (liveness) ---
 		// "All validators" here means: self + everyone in our configured Peers list.
@@ -811,6 +818,8 @@ func (e *Engine) loop(ctx context.Context) {
 			}
 			txBytesByID[id] = raw
 		}
+
+		log.Printf("[epoch=%d] phase:union-built unionSize=%d localHave=%d missing=%d", epoch, len(unionIDs), len(txBytesByID), len(missing))
 
 		// If missing, fetch from peers via /peer/tx/get and try again
 		if len(missing) > 0 {
@@ -1617,6 +1626,22 @@ func (e *Engine) cleanupAfterEpoch(
 		}
 		return
 	}
+
+	// --- diagnostic: detect txs being dropped without ever being applied ---
+	droppedUnapplied := 0
+	for txid, seen := range e.txSeenEpoch {
+		if seen <= epoch {
+			if _, wasAccepted := accepted[txid]; !wasAccepted {
+				if _, wasFailed := failedApplied[txid]; !wasFailed {
+					droppedUnapplied++
+				}
+			}
+		}
+	}
+	if droppedUnapplied > 0 {
+		log.Printf("[epoch=%d] phase:cleanup WARNING dropping %d unapplied txs (never made it to any candidate list)", epoch, droppedUnapplied)
+	}
+	// --- end diagnostic ---
 
 	// 1) Drop everything from the closed epoch window (seenEpoch <= epoch)
 	for txid, seen := range e.txSeenEpoch {
