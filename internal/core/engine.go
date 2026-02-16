@@ -338,8 +338,8 @@ func (e *Engine) HasTx(txid [32]byte) bool {
 	}
 	found := false
 	_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-		if err := ensureBuckets(tx); err != nil {
-			return err
+		if tx.Bucket(BTxs) == nil {
+			return nil
 		}
 		found = hasTx(tx, txid)
 		return nil
@@ -358,9 +358,6 @@ func (e *Engine) GetTxBytes(txid [32]byte) []byte {
 
 	var out []byte
 	_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-		if err := ensureBuckets(tx); err != nil {
-			return err
-		}
 		raw, err := getTxRaw(tx, txid)
 		if err != nil {
 			return nil
