@@ -338,11 +338,6 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 		// it's the synthetic genesis head set during ensureGenesisOnBoot().
 		haveBoundary := [32]byte{}
 		_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-			// ensureBuckets not strictly required here if you know they exist,
-			// but harmless and keeps things consistent.
-			if err := ensureBuckets(tx); err != nil {
-				return err
-			}
 			h, _, _ := getAccount(tx, acct)
 			haveBoundary = h // zero for normal accounts; synthetic anchor for fund/genesis account
 			return nil
