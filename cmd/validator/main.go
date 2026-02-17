@@ -130,6 +130,7 @@ func main() {
 		QuorumPercent:             80,
 		FinalizationQuorumPercent: 60,
 		FinalizationSkew:          800 * time.Millisecond,
+		CandidatesSkew:            800 * time.Millisecond,
 		FundAccount:               fundAcct,
 		GenesisAccount:            genesisAcct,
 		GenesisSupply:             genSupply,
