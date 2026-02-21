@@ -906,37 +906,11 @@ func (e *Engine) loop(ctx context.Context) {
 			winners[k.acct] = eligible[0].id
 		}
 
-		// Apply winners to DB
-		acceptedSet := make(map[[32]byte]struct{}, len(winners))
-		for _, txid := range winners {
-			acceptedSet[txid] = struct{}{}
-		}
-
-		log.Printf("[epoch=%d] phase:apply-start winners=%d validTxs=%d wallMs=%d", epoch, len(winners), len(validParsed), time.Now().UnixMilli())
-		_, failedApplied, aerr := e.applyWinners(winners, txBytesByID, validParsed)
-		log.Printf("[epoch=%d] phase:apply-done failed=%d wallMs=%d", epoch, len(failedApplied), time.Now().UnixMilli())
-		if aerr != nil {
-			e.elog(epoch, "apply error: %v", aerr)
-		}
-		if len(failedApplied) > 0 {
-			// log top few failures (don’t spam)
-			i := 0
-			for id, ferr := range failedApplied {
-				e.elog(epoch, "apply rejected tx %x...: %v", id[:4], ferr)
-				i++
-				if i >= 5 {
-					break
-				}
-			}
-		}
-
-		// Cleanup: delete losers + delete accepted-but-failed-apply
-		postSnap, _ := e.buildSnapshot()
-		log.Printf("[epoch=%d] phase:cleanup-start txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
-		e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
-		log.Printf("[epoch=%d] phase:cleanup-done txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
-
-		// --- Finalization (checkpoint anchor) ---
+		// --- DRY-RUN: compute hashes WITHOUT writing to DB ---
+		// Instead of applying winners immediately, we compute what the acceptedHash
+		// and frontiersRoot would be, then broadcast finalization and wait for quorum
+		// agreement before committing anything. This prevents the need for resync
+		// when validators disagree.
 		acceptedIDs := make([][32]byte, 0, len(winners))
 		for _, txid := range winners {
 			acceptedIDs = append(acceptedIDs, txid)
@@ -945,64 +919,190 @@ func (e *Engine) loop(ctx context.Context) {
 
 		acceptedHash := crypto.CandidatesListHash(acceptedIDs)
 
-		// snapshot epoch frontiers after commit, then compute root
-		if err := SaveEpochFrontiers(e.cfg.DB, epoch); err != nil {
-			e.elog(epoch, "finalization: SaveEpochFrontiers error: %v", err)
-		} else {
-			root, err := ComputeFrontiersRoot(e.cfg.DB, epoch)
-			if err != nil {
-				e.elog(epoch, "finalization: ComputeFrontiersRoot error: %v", err)
+		// Compute what the frontiers root would look like after applying winners,
+		// without actually writing to DB.
+		dryRunRoot, err := ComputeDryRunFrontiersRoot(e.cfg.DB, winners)
+		if err != nil {
+			e.elog(epoch, "dry-run frontiers root error: %v — retrying", err)
+			continue
+		}
+
+		log.Printf("[epoch=%d] phase:dry-run-done winners=%d acceptedHash=%x frontiersRoot=%x wallMs=%d",
+			epoch, len(winners), acceptedHash[:4], dryRunRoot[:4], time.Now().UnixMilli())
+
+		// --- Finalization (checkpoint anchor) ---
+		// Sign and broadcast our proposed finalization, including the full list of
+		// accepted txids so that mismatched validators can apply the quorum's set
+		// without needing a full resync.
+		signerID := e.cfg.Signer.PublicKeyCompressed()
+		digest := crypto.FinalizationDigestP256(epoch, acceptedHash, dryRunRoot)
+		sigDER, sigErr := e.cfg.Signer.SignDigest(digest)
+		if sigErr != nil {
+			e.elog(epoch, "finalization: sign error: %v — retrying", sigErr)
+			continue
+		}
+
+		// Build accepted txid bytes for the proto field
+		acceptedTxidBytes := make([][]byte, len(acceptedIDs))
+		for i, id := range acceptedIDs {
+			cp := make([]byte, 32)
+			copy(cp, id[:])
+			acceptedTxidBytes[i] = cp
+		}
+
+		fin := &pb.EpochFinalization{
+			Epoch:             epoch,
+			AcceptedTxidsHash: &pb.Hash32{V: acceptedHash[:]},
+			FrontiersRoot:     &pb.Hash32{V: dryRunRoot[:]},
+			Signer:            &pb.Pub32{V: signerID[:]},
+			Sig:               &pb.SigDER{V: sigDER}, // <-- SigDER (not Sig64)
+			AcceptedTxids:     acceptedTxidBytes,
+		}
+
+		// store our own finalization (and memory map)
+		if err := e.ReceiveFinalization(fin); err != nil {
+			e.elog(epoch, "finalization: store self error: %v", err)
+		}
+
+		// broadcast to peers
+		log.Printf("[epoch=%d] phase:fin-broadcast-start wallMs=%d", epoch, time.Now().UnixMilli())
+		e.broadcastFinalization(fin)
+		log.Printf("[epoch=%d] phase:fin-broadcast-done wallMs=%d", epoch, time.Now().UnixMilli())
+
+		// allow some skew to receive peers' finalizations (peers must finish apply first)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(e.cfg.FinalizationSkew):
+		}
+		log.Printf("[epoch=%d] phase:fin-skew-done wallMs=%d", epoch, time.Now().UnixMilli())
+
+		// --- Quorum check and commit decision ---
+		// Three outcomes:
+		// 1) Quorum agrees with us -> commit our winners to DB
+		// 2) Quorum agrees on something different -> apply quorum's winner set instead
+		// 3) No quorum reached -> discard everything, txs stay in pool for next epoch
+		qAccepted, qRoot, qCount, qNeed, qTxids := e.finalizationQuorum(epoch)
+
+		if qCount >= qNeed {
+			if bytes.Equal(qAccepted[:], acceptedHash[:]) && bytes.Equal(qRoot[:], dryRunRoot[:]) {
+				// MATCH: quorum agrees with us. Commit our winners to DB.
+				log.Printf("[epoch=%d] phase:apply-start winners=%d validTxs=%d wallMs=%d", epoch, len(winners), len(validParsed), time.Now().UnixMilli())
+				acceptedSet, failedApplied, aerr := e.applyWinners(winners, txBytesByID, validParsed)
+				log.Printf("[epoch=%d] phase:apply-done failed=%d wallMs=%d", epoch, len(failedApplied), time.Now().UnixMilli())
+				if aerr != nil {
+					e.elog(epoch, "apply error: %v — triggering resync", aerr)
+					e.triggerResync(epoch, qAccepted, qRoot)
+					continue
+				}
+				if len(failedApplied) > 0 {
+					i := 0
+					for id, ferr := range failedApplied {
+						e.elog(epoch, "apply rejected tx %x...: %v", id[:4], ferr)
+						i++
+						if i >= 5 {
+							break
+						}
+					}
+					e.elog(epoch, "apply had %d failed txs — triggering resync", len(failedApplied))
+					e.triggerResync(epoch, qAccepted, qRoot)
+					continue
+				}
+
+				// snapshot epoch frontiers after commit
+				if err := SaveEpochFrontiers(e.cfg.DB, epoch); err != nil {
+					e.elog(epoch, "finalization: SaveEpochFrontiers error: %v", err)
+				}
+
+				// Cleanup: delete losers + delete accepted-but-failed-apply
+				postSnap, _ := e.buildSnapshot()
+				log.Printf("[epoch=%d] phase:cleanup-start txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
+				e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
+				log.Printf("[epoch=%d] phase:cleanup-done txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
+
+				e.elog(epoch,
+					"finalized. quorum=%d/%d: (elapsed=%s) : broadcasted to %d : lists received=%d : Applied (winner_accounts=%d, candidate_txs=%d)",
+					qCount, qNeed, time.Since(start).Truncate(time.Millisecond), len(e.cfg.Peers), len(peerLists), len(winners), len(validParsed))
+
 			} else {
-				signerID := e.cfg.Signer.PublicKeyCompressed()
-				digest := crypto.FinalizationDigestP256(epoch, acceptedHash, root)
-				sigDER, sigErr := e.cfg.Signer.SignDigest(digest)
-				if sigErr != nil {
-					e.elog(epoch, "finalization: sign error: %v", sigErr)
-				} else {
-					fin := &pb.EpochFinalization{
-						Epoch:             epoch,
-						AcceptedTxidsHash: &pb.Hash32{V: acceptedHash[:]},
-						FrontiersRoot:     &pb.Hash32{V: root[:]},
-						Signer:            &pb.Pub32{V: signerID[:]},
-						Sig:               &pb.SigDER{V: sigDER}, // <-- SigDER (not Sig64)
+				// MISMATCH: quorum agreed on something different.
+				// Instead of triggering a full resync, try to apply the quorum's winner
+				// set directly. The quorum's finalization message includes the actual txid
+				// list, so we can fetch any missing tx bytes and apply them.
+				e.elog(epoch, "FINALIZATION MISMATCH quorum=%d/%d: have=(%x,%x) want=(%x,%x) — applying quorum set",
+					qCount, qNeed, acceptedHash[:4], dryRunRoot[:4], qAccepted[:4], qRoot[:4])
+
+				if len(qTxids) > 0 {
+					// Build quorum winners from the txid list
+					qWinners := make(map[[32]byte][32]byte)
+					qTxBytesMap := make(map[[32]byte][]byte)
+					qParsedMap := make(map[[32]byte]*pb.Tx)
+					fetchFailed := false
+
+					for _, txid := range qTxids {
+						// Try to get tx bytes locally first (from our own pool/DB)
+						raw := txBytesByID[txid]
+						if len(raw) == 0 {
+							raw = e.GetTxBytes(txid)
+						}
+						if len(raw) == 0 {
+							// Fetch from peers
+							e.fetchMissingTxs(epoch, [][32]byte{txid})
+							raw = e.GetTxBytes(txid)
+						}
+						if len(raw) == 0 {
+							e.elog(epoch, "MISMATCH: cannot find tx bytes for quorum txid %x — triggering resync", txid[:4])
+							e.triggerResync(epoch, qAccepted, qRoot)
+							fetchFailed = true
+							break
+						}
+						tx, perr := ParseTx(raw)
+						if perr != nil {
+							e.elog(epoch, "MISMATCH: cannot parse quorum txid %x — triggering resync", txid[:4])
+							e.triggerResync(epoch, qAccepted, qRoot)
+							fetchFailed = true
+							break
+						}
+						var acct [32]byte
+						copy(acct[:], tx.Account.V)
+						qWinners[acct] = txid
+						qTxBytesMap[txid] = raw
+						qParsedMap[txid] = tx
 					}
 
-					// store our own finalization (and memory map)
-					if err := e.ReceiveFinalization(fin); err != nil {
-						e.elog(epoch, "finalization: store self error: %v", err)
-					}
-
-					// broadcast to peers
-					log.Printf("[epoch=%d] phase:fin-broadcast-start wallMs=%d", epoch, time.Now().UnixMilli())
-					e.broadcastFinalization(fin)
-					log.Printf("[epoch=%d] phase:fin-broadcast-done wallMs=%d", epoch, time.Now().UnixMilli())
-
-					// allow some skew to receive peers’ finalizations (peers must finish apply first)
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(e.cfg.FinalizationSkew):
-					}
-					log.Printf("[epoch=%d] phase:fin-skew-done wallMs=%d", epoch, time.Now().UnixMilli())
-
-					// quorum check (log-only for now; later this triggers resync)
-					qAccepted, qRoot, qCount, qNeed := e.finalizationQuorum(epoch)
-					if qCount >= qNeed {
-						if !bytes.Equal(qAccepted[:], acceptedHash[:]) || !bytes.Equal(qRoot[:], root[:]) {
-							e.elog(epoch, "FINALIZATION MISMATCH quorum=%d/%d: have=(%x,%x) want=(%x,%x)",
-								qCount, qNeed, acceptedHash[:], root[:], qAccepted[:], qRoot[:])
-							// Enter resync mode immediately. Normal epoch processing will be paused.
+					if !fetchFailed {
+						// Apply the quorum's winners instead of our own
+						log.Printf("[epoch=%d] phase:apply-quorum-start winners=%d wallMs=%d", epoch, len(qWinners), time.Now().UnixMilli())
+						acceptedSet, failedApplied, aerr := e.applyWinners(qWinners, qTxBytesMap, qParsedMap)
+						log.Printf("[epoch=%d] phase:apply-quorum-done failed=%d wallMs=%d", epoch, len(failedApplied), time.Now().UnixMilli())
+						if aerr != nil || len(failedApplied) > 0 {
+							e.elog(epoch, "MISMATCH: apply quorum failed (err=%v, failed=%d) — triggering resync", aerr, len(failedApplied))
 							e.triggerResync(epoch, qAccepted, qRoot)
 						} else {
-							e.elog(epoch,
-								"finalized. quorum=%d/%d: (elapsed=%s) : broadcasted to %d : lists received=%d : Applied (winner_accounts=%d, candidate_txs=%d)",
-								qCount, qNeed, time.Since(start).Truncate(time.Millisecond), len(e.cfg.Peers), len(peerLists), len(winners), len(validParsed))
+							// snapshot epoch frontiers after commit
+							if err := SaveEpochFrontiers(e.cfg.DB, epoch); err != nil {
+								e.elog(epoch, "finalization: SaveEpochFrontiers error: %v", err)
+							}
+
+							// Cleanup: same as normal path
+							postSnap, _ := e.buildSnapshot()
+							log.Printf("[epoch=%d] phase:cleanup-start txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
+							e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
+							log.Printf("[epoch=%d] phase:cleanup-done txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
+
+							e.elog(epoch, "applied quorum set: %d winners", len(qWinners))
 						}
-					} else {
-						e.elog(epoch, "finalization not reached: %d/%d", qCount, qNeed)
 					}
+				} else {
+					// No txid list available from quorum — must fall back to resync
+					e.elog(epoch, "MISMATCH: no quorum txid list available — triggering resync")
+					e.triggerResync(epoch, qAccepted, qRoot)
 				}
 			}
+		} else {
+			// NO QUORUM: not enough validators responded.
+			// Discard everything — no DB writes. Txs stay in pool for next epoch.
+			e.elog(epoch, "finalization not reached: %d/%d", qCount, qNeed)
 		}
 		// --- end finalization ---
 	}
@@ -1383,7 +1483,7 @@ func (e *Engine) broadcastFinalization(fin *pb.EpochFinalization) {
 	}
 }
 
-func (e *Engine) finalizationQuorum(epoch uint64) (bestAccepted [32]byte, bestRoot [32]byte, count int, need int) {
+func (e *Engine) finalizationQuorum(epoch uint64) (bestAccepted [32]byte, bestRoot [32]byte, count int, need int, txids [][32]byte) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -1395,7 +1495,7 @@ func (e *Engine) finalizationQuorum(epoch uint64) (bestAccepted [32]byte, bestRo
 
 	m := e.peerFinals[epoch]
 	if m == nil {
-		return [32]byte{}, [32]byte{}, 0, need
+		return [32]byte{}, [32]byte{}, 0, need, nil
 	}
 
 	type key struct {
@@ -1425,7 +1525,30 @@ func (e *Engine) finalizationQuorum(epoch uint64) (bestAccepted [32]byte, bestRo
 		}
 	}
 
-	return bestK.accepted, bestK.root, bestC, need
+	// Find the txid list from any finalization that matches the quorum winner
+	var bestTxids [][32]byte
+	for _, fin := range m {
+		if fin == nil || fin.AcceptedTxidsHash == nil || fin.FrontiersRoot == nil {
+			continue
+		}
+		var a [32]byte
+		copy(a[:], fin.AcceptedTxidsHash.V)
+		var r [32]byte
+		copy(r[:], fin.FrontiersRoot.V)
+		if a == bestK.accepted && r == bestK.root && len(fin.AcceptedTxids) > 0 {
+			bestTxids = make([][32]byte, 0, len(fin.AcceptedTxids))
+			for _, raw := range fin.AcceptedTxids {
+				if len(raw) == 32 {
+					var id [32]byte
+					copy(id[:], raw)
+					bestTxids = append(bestTxids, id)
+				}
+			}
+			break
+		}
+	}
+
+	return bestK.accepted, bestK.root, bestC, need, bestTxids
 }
 
 func (e *Engine) getPeerLists(epoch uint64) map[[33]byte]*CandidateList {
