@@ -331,3 +331,59 @@ func ComputeFrontiersRoot(db *bbolt.DB, epoch uint64) ([32]byte, error) {
 	copy(out[:], h.Sum(nil))
 	return out, nil
 }
+
+// ComputeDryRunFrontiersRoot computes what the frontiers root would be if the
+// given winners were applied, without actually writing to the DB.
+// winners maps account -> txid (the new head after apply).
+func ComputeDryRunFrontiersRoot(db *bbolt.DB, winners map[[32]byte][32]byte) ([32]byte, error) {
+	// 1. Read all current account->head pairs from DB
+	frontiers := make(map[[32]byte][32]byte)
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(BAccounts)
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if len(k) != 32 {
+				continue
+			}
+			head, _, _, ok := unpackAccount(v)
+			if !ok {
+				continue
+			}
+			var acct [32]byte
+			copy(acct[:], k)
+			frontiers[acct] = head
+		}
+		return nil
+	})
+	if err != nil {
+		return [32]byte{}, err
+	}
+
+	// 2. Overlay winners: for each winner, new head = txid
+	for acct, txid := range winners {
+		frontiers[acct] = txid
+	}
+
+	// 3. Sort and hash (same algorithm as ComputeFrontiersRoot)
+	rows := make([]FrontierEntry, 0, len(frontiers))
+	for acct, head := range frontiers {
+		rows = append(rows, FrontierEntry{AccountID: acct, HeadHash: head})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return bytes.Compare(rows[i].AccountID[:], rows[j].AccountID[:]) < 0
+	})
+
+	h := sha256.New()
+	var buf [64]byte
+	for _, r := range rows {
+		copy(buf[:32], r.AccountID[:])
+		copy(buf[32:], r.HeadHash[:])
+		_, _ = h.Write(buf[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out, nil
+}

@@ -194,6 +194,8 @@ message EpochFinalization {
 
   Pub32 signer = 4;   // validator_id
   SigDER sig = 5;     // signature over digest(epoch, accepted_txids_hash, frontiers_root)
+
+  repeated bytes accepted_txids = 6;  // actual winner txid list (32 bytes each) so peers can apply quorum's set on mismatch
 }
 
 // --- Resync / bootstrap (Nano-style) ---

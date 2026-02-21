@@ -293,25 +293,32 @@ func (e *Engine) fetchAllFrontiers(ctx context.Context, peer string, epoch uint6
 	return out, nil
 }
 
-// rebuildFromFrontiers wipes local state buckets and replays chains for every frontier account.
+// rebuildFromFrontiers incrementally syncs local state to match peer frontiers
 func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp uint64, frontiers map[[32]byte][32]byte) error {
 	peer = strings.TrimRight(peer, "/")
 
-	// 1) wipe state buckets
+	// 1) Clear only accounts whose head diverged from peer
 	if err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
-		// delete and recreate mutable buckets
-		for _, b := range [][]byte{BAccounts, BTxs, BRecv, BEpochFrontiers, BFinalizations} {
-			_ = tx.DeleteBucket(b)
-			if _, err := tx.CreateBucket(b); err != nil {
-				return err
+		accBkt := tx.Bucket(BAccounts)
+		for acct, peerHead := range frontiers {
+			head, _, _, ok := unpackAccount(accBkt.Get(acct[:]))
+			if !ok || head == peerHead {
+				continue // missing or already matches
 			}
+			// Diverged — wipe this account so it gets fully re-downloaded
+			_ = accBkt.Delete(acct[:])
 		}
+		// Clear epoch frontiers/finalizations (will be recomputed after sync)
+		_ = tx.DeleteBucket(BEpochFrontiers)
+		_, _ = tx.CreateBucket(BEpochFrontiers)
+		_ = tx.DeleteBucket(BFinalizations)
+		_, _ = tx.CreateBucket(BFinalizations)
 		return nil
 	}); err != nil {
-		return fmt.Errorf("resync: wipe buckets: %w", err)
+		return fmt.Errorf("resync: selective wipe: %w", err)
 	}
 
 	// 2) restore genesis anchor

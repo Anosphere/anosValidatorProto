@@ -1532,8 +1532,9 @@ type EpochFinalization struct {
 	Epoch             uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	AcceptedTxidsHash *Hash32                `protobuf:"bytes,2,opt,name=accepted_txids_hash,json=acceptedTxidsHash,proto3" json:"accepted_txids_hash,omitempty"`
 	FrontiersRoot     *Hash32                `protobuf:"bytes,3,opt,name=frontiers_root,json=frontiersRoot,proto3" json:"frontiers_root,omitempty"`
-	Signer            *Pub32                 `protobuf:"bytes,4,opt,name=signer,proto3" json:"signer,omitempty"` // validator_id
-	Sig               *SigDER                `protobuf:"bytes,5,opt,name=sig,proto3" json:"sig,omitempty"`       // signature over digest(epoch, accepted_txids_hash, frontiers_root)
+	Signer            *Pub32                 `protobuf:"bytes,4,opt,name=signer,proto3" json:"signer,omitempty"`                                    // validator_id
+	Sig               *SigDER                `protobuf:"bytes,5,opt,name=sig,proto3" json:"sig,omitempty"`                                          // signature over digest(epoch, accepted_txids_hash, frontiers_root)
+	AcceptedTxids     [][]byte               `protobuf:"bytes,6,rep,name=accepted_txids,json=acceptedTxids,proto3" json:"accepted_txids,omitempty"` // actual winner txid list (32 bytes each) so peers can apply quorum's set on mismatch
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1599,6 +1600,13 @@ func (x *EpochFinalization) GetSigner() *Pub32 {
 func (x *EpochFinalization) GetSig() *SigDER {
 	if x != nil {
 		return x.Sig
+	}
+	return nil
+}
+
+func (x *EpochFinalization) GetAcceptedTxids() [][]byte {
+	if x != nil {
+		return x.AcceptedTxids
 	}
 	return nil
 }
@@ -2167,13 +2175,14 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\bproposer\x18\x02 \x01(\v2\x0e.anos.v2.Pub32R\bproposer\x12#\n" +
 	"\x04txid\x18\x03 \x03(\v2\x0f.anos.v2.Hash32R\x04txid\x12,\n" +
 	"\tlist_hash\x18\x04 \x01(\v2\x0f.anos.v2.Hash32R\blistHash\x12!\n" +
-	"\x03sig\x18\x05 \x01(\v2\x0f.anos.v2.SigDERR\x03sig\"\xed\x01\n" +
+	"\x03sig\x18\x05 \x01(\v2\x0f.anos.v2.SigDERR\x03sig\"\x94\x02\n" +
 	"\x11EpochFinalization\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12?\n" +
 	"\x13accepted_txids_hash\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x11acceptedTxidsHash\x126\n" +
 	"\x0efrontiers_root\x18\x03 \x01(\v2\x0f.anos.v2.Hash32R\rfrontiersRoot\x12&\n" +
 	"\x06signer\x18\x04 \x01(\v2\x0e.anos.v2.Pub32R\x06signer\x12!\n" +
-	"\x03sig\x18\x05 \x01(\v2\x0f.anos.v2.SigDERR\x03sig\"\x13\n" +
+	"\x03sig\x18\x05 \x01(\v2\x0f.anos.v2.SigDERR\x03sig\x12%\n" +
+	"\x0eaccepted_txids\x18\x06 \x03(\fR\racceptedTxids\"\x13\n" +
 	"\x11SyncLatestRequest\"7\n" +
 	"\x12SyncLatestResponse\x12!\n" +
 	"\flatest_epoch\x18\x01 \x01(\x04R\vlatestEpoch\"/\n" +
