@@ -18,9 +18,11 @@ message AccountId { bytes v = 1; } // 32 bytes
 // --------------------
 
 enum TxType {
-  TX_TYPE_UNSPECIFIED = 0;
-  TX_TYPE_SEND        = 1;
-  TX_TYPE_RECEIVE     = 2;
+  TX_TYPE_UNSPECIFIED        = 0;
+  TX_TYPE_SEND               = 1;
+  TX_TYPE_RECEIVE            = 2;
+  TX_TYPE_ADD_ARBITRATOR     = 3;
+  TX_TYPE_REMOVE_ARBITRATOR  = 4;
 }
 
 message TxBodySend {
@@ -34,6 +36,30 @@ message TxBodyReceive {
   Hash32 receivable_id = 1;
 }
 
+message TxBodyAddArbitrator {
+  Pub32 pubkey = 1;  // ed25519 pubkey being added (32 bytes)
+}
+
+message TxBodyRemoveArbitrator {
+  Pub32 pubkey = 1;  // ed25519 pubkey being removed (32 bytes)
+}
+
+message MultiSig {
+  repeated Pub32 pubkeys = 1;
+  repeated Sig64 sigs    = 2;
+}
+
+message SignerSet {
+  repeated Pub32 pubkeys  = 1;
+  uint32         threshold = 2;
+}
+
+message GetSignerSetResponse {
+  bool      ok         = 1;
+  SignerSet signer_set = 2;
+  ApiError  error      = 3;
+}
+
 // Canonical bytes-to-sign for a transaction.
 // Rule: signature = Ed25519( SHA256( serialize(TxSignable) ) )
 message TxSignable {
@@ -44,8 +70,10 @@ message TxSignable {
   uint64 seq = 4;         // monotonic per-account sequence
 
   oneof body {
-    TxBodySend send = 10;
-    TxBodyReceive receive = 11;
+    TxBodySend             send              = 10;
+    TxBodyReceive          receive           = 11;
+    TxBodyAddArbitrator    add_arbitrator    = 12;
+    TxBodyRemoveArbitrator remove_arbitrator = 13;
   }
 }
 
@@ -57,11 +85,14 @@ message Tx {
   uint64 seq = 4;         // monotonic per-account sequence
 
   oneof body {
-    TxBodySend send = 10;
-    TxBodyReceive receive = 11;
+    TxBodySend             send              = 10;
+    TxBodyReceive          receive           = 11;
+    TxBodyAddArbitrator    add_arbitrator    = 12;
+    TxBodyRemoveArbitrator remove_arbitrator = 13;
   }
 
   Sig64 sig = 20;         // signature over TxSignable canonical bytes (see above)
+  MultiSig multi_sig = 21;
 }
 
 message Receivable {

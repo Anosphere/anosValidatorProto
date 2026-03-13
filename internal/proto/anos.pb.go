@@ -24,9 +24,11 @@ const (
 type TxType int32
 
 const (
-	TxType_TX_TYPE_UNSPECIFIED TxType = 0
-	TxType_TX_TYPE_SEND        TxType = 1
-	TxType_TX_TYPE_RECEIVE     TxType = 2
+	TxType_TX_TYPE_UNSPECIFIED       TxType = 0
+	TxType_TX_TYPE_SEND              TxType = 1
+	TxType_TX_TYPE_RECEIVE           TxType = 2
+	TxType_TX_TYPE_ADD_ARBITRATOR    TxType = 3
+	TxType_TX_TYPE_REMOVE_ARBITRATOR TxType = 4
 )
 
 // Enum value maps for TxType.
@@ -35,11 +37,15 @@ var (
 		0: "TX_TYPE_UNSPECIFIED",
 		1: "TX_TYPE_SEND",
 		2: "TX_TYPE_RECEIVE",
+		3: "TX_TYPE_ADD_ARBITRATOR",
+		4: "TX_TYPE_REMOVE_ARBITRATOR",
 	}
 	TxType_value = map[string]int32{
-		"TX_TYPE_UNSPECIFIED": 0,
-		"TX_TYPE_SEND":        1,
-		"TX_TYPE_RECEIVE":     2,
+		"TX_TYPE_UNSPECIFIED":       0,
+		"TX_TYPE_SEND":              1,
+		"TX_TYPE_RECEIVE":           2,
+		"TX_TYPE_ADD_ARBITRATOR":    3,
+		"TX_TYPE_REMOVE_ARBITRATOR": 4,
 	}
 )
 
@@ -359,6 +365,258 @@ func (x *TxBodyReceive) GetReceivableId() *Hash32 {
 	return nil
 }
 
+type TxBodyAddArbitrator struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pubkey        *Pub32                 `protobuf:"bytes,1,opt,name=pubkey,proto3" json:"pubkey,omitempty"` // ed25519 pubkey being added (32 bytes)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxBodyAddArbitrator) Reset() {
+	*x = TxBodyAddArbitrator{}
+	mi := &file_proto_anos_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxBodyAddArbitrator) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxBodyAddArbitrator) ProtoMessage() {}
+
+func (x *TxBodyAddArbitrator) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxBodyAddArbitrator.ProtoReflect.Descriptor instead.
+func (*TxBodyAddArbitrator) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TxBodyAddArbitrator) GetPubkey() *Pub32 {
+	if x != nil {
+		return x.Pubkey
+	}
+	return nil
+}
+
+type TxBodyRemoveArbitrator struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pubkey        *Pub32                 `protobuf:"bytes,1,opt,name=pubkey,proto3" json:"pubkey,omitempty"` // ed25519 pubkey being removed (32 bytes)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxBodyRemoveArbitrator) Reset() {
+	*x = TxBodyRemoveArbitrator{}
+	mi := &file_proto_anos_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxBodyRemoveArbitrator) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxBodyRemoveArbitrator) ProtoMessage() {}
+
+func (x *TxBodyRemoveArbitrator) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxBodyRemoveArbitrator.ProtoReflect.Descriptor instead.
+func (*TxBodyRemoveArbitrator) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *TxBodyRemoveArbitrator) GetPubkey() *Pub32 {
+	if x != nil {
+		return x.Pubkey
+	}
+	return nil
+}
+
+type MultiSig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pubkeys       []*Pub32               `protobuf:"bytes,1,rep,name=pubkeys,proto3" json:"pubkeys,omitempty"`
+	Sigs          []*Sig64               `protobuf:"bytes,2,rep,name=sigs,proto3" json:"sigs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MultiSig) Reset() {
+	*x = MultiSig{}
+	mi := &file_proto_anos_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MultiSig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MultiSig) ProtoMessage() {}
+
+func (x *MultiSig) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MultiSig.ProtoReflect.Descriptor instead.
+func (*MultiSig) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *MultiSig) GetPubkeys() []*Pub32 {
+	if x != nil {
+		return x.Pubkeys
+	}
+	return nil
+}
+
+func (x *MultiSig) GetSigs() []*Sig64 {
+	if x != nil {
+		return x.Sigs
+	}
+	return nil
+}
+
+type SignerSet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pubkeys       []*Pub32               `protobuf:"bytes,1,rep,name=pubkeys,proto3" json:"pubkeys,omitempty"`
+	Threshold     uint32                 `protobuf:"varint,2,opt,name=threshold,proto3" json:"threshold,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignerSet) Reset() {
+	*x = SignerSet{}
+	mi := &file_proto_anos_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignerSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignerSet) ProtoMessage() {}
+
+func (x *SignerSet) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignerSet.ProtoReflect.Descriptor instead.
+func (*SignerSet) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SignerSet) GetPubkeys() []*Pub32 {
+	if x != nil {
+		return x.Pubkeys
+	}
+	return nil
+}
+
+func (x *SignerSet) GetThreshold() uint32 {
+	if x != nil {
+		return x.Threshold
+	}
+	return 0
+}
+
+type GetSignerSetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	SignerSet     *SignerSet             `protobuf:"bytes,2,opt,name=signer_set,json=signerSet,proto3" json:"signer_set,omitempty"`
+	Error         *ApiError              `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSignerSetResponse) Reset() {
+	*x = GetSignerSetResponse{}
+	mi := &file_proto_anos_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSignerSetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSignerSetResponse) ProtoMessage() {}
+
+func (x *GetSignerSetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_anos_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSignerSetResponse.ProtoReflect.Descriptor instead.
+func (*GetSignerSetResponse) Descriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetSignerSetResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *GetSignerSetResponse) GetSignerSet() *SignerSet {
+	if x != nil {
+		return x.SignerSet
+	}
+	return nil
+}
+
+func (x *GetSignerSetResponse) GetError() *ApiError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 // Canonical bytes-to-sign for a transaction.
 // Rule: signature = Ed25519( SHA256( serialize(TxSignable) ) )
 type TxSignable struct {
@@ -371,6 +629,8 @@ type TxSignable struct {
 	//
 	//	*TxSignable_Send
 	//	*TxSignable_Receive
+	//	*TxSignable_AddArbitrator
+	//	*TxSignable_RemoveArbitrator
 	Body          isTxSignable_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -378,7 +638,7 @@ type TxSignable struct {
 
 func (x *TxSignable) Reset() {
 	*x = TxSignable{}
-	mi := &file_proto_anos_proto_msgTypes[6]
+	mi := &file_proto_anos_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -390,7 +650,7 @@ func (x *TxSignable) String() string {
 func (*TxSignable) ProtoMessage() {}
 
 func (x *TxSignable) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[6]
+	mi := &file_proto_anos_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -403,7 +663,7 @@ func (x *TxSignable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxSignable.ProtoReflect.Descriptor instead.
 func (*TxSignable) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{6}
+	return file_proto_anos_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *TxSignable) GetType() TxType {
@@ -459,6 +719,24 @@ func (x *TxSignable) GetReceive() *TxBodyReceive {
 	return nil
 }
 
+func (x *TxSignable) GetAddArbitrator() *TxBodyAddArbitrator {
+	if x != nil {
+		if x, ok := x.Body.(*TxSignable_AddArbitrator); ok {
+			return x.AddArbitrator
+		}
+	}
+	return nil
+}
+
+func (x *TxSignable) GetRemoveArbitrator() *TxBodyRemoveArbitrator {
+	if x != nil {
+		if x, ok := x.Body.(*TxSignable_RemoveArbitrator); ok {
+			return x.RemoveArbitrator
+		}
+	}
+	return nil
+}
+
 type isTxSignable_Body interface {
 	isTxSignable_Body()
 }
@@ -471,9 +749,21 @@ type TxSignable_Receive struct {
 	Receive *TxBodyReceive `protobuf:"bytes,11,opt,name=receive,proto3,oneof"`
 }
 
+type TxSignable_AddArbitrator struct {
+	AddArbitrator *TxBodyAddArbitrator `protobuf:"bytes,12,opt,name=add_arbitrator,json=addArbitrator,proto3,oneof"`
+}
+
+type TxSignable_RemoveArbitrator struct {
+	RemoveArbitrator *TxBodyRemoveArbitrator `protobuf:"bytes,13,opt,name=remove_arbitrator,json=removeArbitrator,proto3,oneof"`
+}
+
 func (*TxSignable_Send) isTxSignable_Body() {}
 
 func (*TxSignable_Receive) isTxSignable_Body() {}
+
+func (*TxSignable_AddArbitrator) isTxSignable_Body() {}
+
+func (*TxSignable_RemoveArbitrator) isTxSignable_Body() {}
 
 type Tx struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -485,15 +775,18 @@ type Tx struct {
 	//
 	//	*Tx_Send
 	//	*Tx_Receive
+	//	*Tx_AddArbitrator
+	//	*Tx_RemoveArbitrator
 	Body          isTx_Body `protobuf_oneof:"body"`
 	Sig           *Sig64    `protobuf:"bytes,20,opt,name=sig,proto3" json:"sig,omitempty"` // signature over TxSignable canonical bytes (see above)
+	MultiSig      *MultiSig `protobuf:"bytes,21,opt,name=multi_sig,json=multiSig,proto3" json:"multi_sig,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Tx) Reset() {
 	*x = Tx{}
-	mi := &file_proto_anos_proto_msgTypes[7]
+	mi := &file_proto_anos_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -505,7 +798,7 @@ func (x *Tx) String() string {
 func (*Tx) ProtoMessage() {}
 
 func (x *Tx) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[7]
+	mi := &file_proto_anos_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -518,7 +811,7 @@ func (x *Tx) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tx.ProtoReflect.Descriptor instead.
 func (*Tx) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{7}
+	return file_proto_anos_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Tx) GetType() TxType {
@@ -574,9 +867,34 @@ func (x *Tx) GetReceive() *TxBodyReceive {
 	return nil
 }
 
+func (x *Tx) GetAddArbitrator() *TxBodyAddArbitrator {
+	if x != nil {
+		if x, ok := x.Body.(*Tx_AddArbitrator); ok {
+			return x.AddArbitrator
+		}
+	}
+	return nil
+}
+
+func (x *Tx) GetRemoveArbitrator() *TxBodyRemoveArbitrator {
+	if x != nil {
+		if x, ok := x.Body.(*Tx_RemoveArbitrator); ok {
+			return x.RemoveArbitrator
+		}
+	}
+	return nil
+}
+
 func (x *Tx) GetSig() *Sig64 {
 	if x != nil {
 		return x.Sig
+	}
+	return nil
+}
+
+func (x *Tx) GetMultiSig() *MultiSig {
+	if x != nil {
+		return x.MultiSig
 	}
 	return nil
 }
@@ -593,9 +911,21 @@ type Tx_Receive struct {
 	Receive *TxBodyReceive `protobuf:"bytes,11,opt,name=receive,proto3,oneof"`
 }
 
+type Tx_AddArbitrator struct {
+	AddArbitrator *TxBodyAddArbitrator `protobuf:"bytes,12,opt,name=add_arbitrator,json=addArbitrator,proto3,oneof"`
+}
+
+type Tx_RemoveArbitrator struct {
+	RemoveArbitrator *TxBodyRemoveArbitrator `protobuf:"bytes,13,opt,name=remove_arbitrator,json=removeArbitrator,proto3,oneof"`
+}
+
 func (*Tx_Send) isTx_Body() {}
 
 func (*Tx_Receive) isTx_Body() {}
+
+func (*Tx_AddArbitrator) isTx_Body() {}
+
+func (*Tx_RemoveArbitrator) isTx_Body() {}
 
 type Receivable struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -613,7 +943,7 @@ type Receivable struct {
 
 func (x *Receivable) Reset() {
 	*x = Receivable{}
-	mi := &file_proto_anos_proto_msgTypes[8]
+	mi := &file_proto_anos_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +955,7 @@ func (x *Receivable) String() string {
 func (*Receivable) ProtoMessage() {}
 
 func (x *Receivable) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[8]
+	mi := &file_proto_anos_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +968,7 @@ func (x *Receivable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Receivable.ProtoReflect.Descriptor instead.
 func (*Receivable) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{8}
+	return file_proto_anos_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Receivable) GetId() *Hash32 {
@@ -709,7 +1039,7 @@ type EpochRecord struct {
 
 func (x *EpochRecord) Reset() {
 	*x = EpochRecord{}
-	mi := &file_proto_anos_proto_msgTypes[9]
+	mi := &file_proto_anos_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -721,7 +1051,7 @@ func (x *EpochRecord) String() string {
 func (*EpochRecord) ProtoMessage() {}
 
 func (x *EpochRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[9]
+	mi := &file_proto_anos_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -734,7 +1064,7 @@ func (x *EpochRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EpochRecord.ProtoReflect.Descriptor instead.
 func (*EpochRecord) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{9}
+	return file_proto_anos_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EpochRecord) GetEpoch() uint64 {
@@ -777,7 +1107,7 @@ type ApiError struct {
 
 func (x *ApiError) Reset() {
 	*x = ApiError{}
-	mi := &file_proto_anos_proto_msgTypes[10]
+	mi := &file_proto_anos_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -789,7 +1119,7 @@ func (x *ApiError) String() string {
 func (*ApiError) ProtoMessage() {}
 
 func (x *ApiError) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[10]
+	mi := &file_proto_anos_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -802,7 +1132,7 @@ func (x *ApiError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApiError.ProtoReflect.Descriptor instead.
 func (*ApiError) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{10}
+	return file_proto_anos_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ApiError) GetCode() uint32 {
@@ -836,7 +1166,7 @@ type SubmitTxRequest struct {
 
 func (x *SubmitTxRequest) Reset() {
 	*x = SubmitTxRequest{}
-	mi := &file_proto_anos_proto_msgTypes[11]
+	mi := &file_proto_anos_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -848,7 +1178,7 @@ func (x *SubmitTxRequest) String() string {
 func (*SubmitTxRequest) ProtoMessage() {}
 
 func (x *SubmitTxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[11]
+	mi := &file_proto_anos_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -861,7 +1191,7 @@ func (x *SubmitTxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitTxRequest.ProtoReflect.Descriptor instead.
 func (*SubmitTxRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{11}
+	return file_proto_anos_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SubmitTxRequest) GetTx() *Tx {
@@ -884,7 +1214,7 @@ type SubmitTxResponse struct {
 
 func (x *SubmitTxResponse) Reset() {
 	*x = SubmitTxResponse{}
-	mi := &file_proto_anos_proto_msgTypes[12]
+	mi := &file_proto_anos_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -896,7 +1226,7 @@ func (x *SubmitTxResponse) String() string {
 func (*SubmitTxResponse) ProtoMessage() {}
 
 func (x *SubmitTxResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[12]
+	mi := &file_proto_anos_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -909,7 +1239,7 @@ func (x *SubmitTxResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitTxResponse.ProtoReflect.Descriptor instead.
 func (*SubmitTxResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{12}
+	return file_proto_anos_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SubmitTxResponse) GetOk() bool {
@@ -947,7 +1277,7 @@ type AccountState struct {
 
 func (x *AccountState) Reset() {
 	*x = AccountState{}
-	mi := &file_proto_anos_proto_msgTypes[13]
+	mi := &file_proto_anos_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -959,7 +1289,7 @@ func (x *AccountState) String() string {
 func (*AccountState) ProtoMessage() {}
 
 func (x *AccountState) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[13]
+	mi := &file_proto_anos_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -972,7 +1302,7 @@ func (x *AccountState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccountState.ProtoReflect.Descriptor instead.
 func (*AccountState) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{13}
+	return file_proto_anos_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AccountState) GetAccount() *AccountId {
@@ -1012,7 +1342,7 @@ type GetAccountRequest struct {
 
 func (x *GetAccountRequest) Reset() {
 	*x = GetAccountRequest{}
-	mi := &file_proto_anos_proto_msgTypes[14]
+	mi := &file_proto_anos_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1024,7 +1354,7 @@ func (x *GetAccountRequest) String() string {
 func (*GetAccountRequest) ProtoMessage() {}
 
 func (x *GetAccountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[14]
+	mi := &file_proto_anos_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1037,7 +1367,7 @@ func (x *GetAccountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAccountRequest.ProtoReflect.Descriptor instead.
 func (*GetAccountRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{14}
+	return file_proto_anos_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetAccountRequest) GetAccount() *AccountId {
@@ -1058,7 +1388,7 @@ type GetAccountResponse struct {
 
 func (x *GetAccountResponse) Reset() {
 	*x = GetAccountResponse{}
-	mi := &file_proto_anos_proto_msgTypes[15]
+	mi := &file_proto_anos_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1070,7 +1400,7 @@ func (x *GetAccountResponse) String() string {
 func (*GetAccountResponse) ProtoMessage() {}
 
 func (x *GetAccountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[15]
+	mi := &file_proto_anos_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1083,7 +1413,7 @@ func (x *GetAccountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAccountResponse.ProtoReflect.Descriptor instead.
 func (*GetAccountResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{15}
+	return file_proto_anos_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetAccountResponse) GetOk() bool {
@@ -1118,7 +1448,7 @@ type ListReceivablesRequest struct {
 
 func (x *ListReceivablesRequest) Reset() {
 	*x = ListReceivablesRequest{}
-	mi := &file_proto_anos_proto_msgTypes[16]
+	mi := &file_proto_anos_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1130,7 +1460,7 @@ func (x *ListReceivablesRequest) String() string {
 func (*ListReceivablesRequest) ProtoMessage() {}
 
 func (x *ListReceivablesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[16]
+	mi := &file_proto_anos_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1143,7 +1473,7 @@ func (x *ListReceivablesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReceivablesRequest.ProtoReflect.Descriptor instead.
 func (*ListReceivablesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{16}
+	return file_proto_anos_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListReceivablesRequest) GetAccount() *AccountId {
@@ -1171,7 +1501,7 @@ type ListReceivablesResponse struct {
 
 func (x *ListReceivablesResponse) Reset() {
 	*x = ListReceivablesResponse{}
-	mi := &file_proto_anos_proto_msgTypes[17]
+	mi := &file_proto_anos_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1183,7 +1513,7 @@ func (x *ListReceivablesResponse) String() string {
 func (*ListReceivablesResponse) ProtoMessage() {}
 
 func (x *ListReceivablesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[17]
+	mi := &file_proto_anos_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1196,7 +1526,7 @@ func (x *ListReceivablesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListReceivablesResponse.ProtoReflect.Descriptor instead.
 func (*ListReceivablesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{17}
+	return file_proto_anos_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListReceivablesResponse) GetOk() bool {
@@ -1231,7 +1561,7 @@ type SigDER struct {
 
 func (x *SigDER) Reset() {
 	*x = SigDER{}
-	mi := &file_proto_anos_proto_msgTypes[18]
+	mi := &file_proto_anos_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1243,7 +1573,7 @@ func (x *SigDER) String() string {
 func (*SigDER) ProtoMessage() {}
 
 func (x *SigDER) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[18]
+	mi := &file_proto_anos_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1256,7 +1586,7 @@ func (x *SigDER) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SigDER.ProtoReflect.Descriptor instead.
 func (*SigDER) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{18}
+	return file_proto_anos_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SigDER) GetV() []byte {
@@ -1277,7 +1607,7 @@ type TxInv struct {
 
 func (x *TxInv) Reset() {
 	*x = TxInv{}
-	mi := &file_proto_anos_proto_msgTypes[19]
+	mi := &file_proto_anos_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1289,7 +1619,7 @@ func (x *TxInv) String() string {
 func (*TxInv) ProtoMessage() {}
 
 func (x *TxInv) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[19]
+	mi := &file_proto_anos_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1302,7 +1632,7 @@ func (x *TxInv) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxInv.ProtoReflect.Descriptor instead.
 func (*TxInv) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{19}
+	return file_proto_anos_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TxInv) GetEpoch() uint64 {
@@ -1337,7 +1667,7 @@ type TxWant struct {
 
 func (x *TxWant) Reset() {
 	*x = TxWant{}
-	mi := &file_proto_anos_proto_msgTypes[20]
+	mi := &file_proto_anos_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1349,7 +1679,7 @@ func (x *TxWant) String() string {
 func (*TxWant) ProtoMessage() {}
 
 func (x *TxWant) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[20]
+	mi := &file_proto_anos_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1362,7 +1692,7 @@ func (x *TxWant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxWant.ProtoReflect.Descriptor instead.
 func (*TxWant) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{20}
+	return file_proto_anos_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TxWant) GetEpoch() uint64 {
@@ -1397,7 +1727,7 @@ type TxPush struct {
 
 func (x *TxPush) Reset() {
 	*x = TxPush{}
-	mi := &file_proto_anos_proto_msgTypes[21]
+	mi := &file_proto_anos_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1409,7 +1739,7 @@ func (x *TxPush) String() string {
 func (*TxPush) ProtoMessage() {}
 
 func (x *TxPush) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[21]
+	mi := &file_proto_anos_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1422,7 +1752,7 @@ func (x *TxPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxPush.ProtoReflect.Descriptor instead.
 func (*TxPush) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{21}
+	return file_proto_anos_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TxPush) GetEpoch() uint64 {
@@ -1461,7 +1791,7 @@ type CandidateListV2 struct {
 
 func (x *CandidateListV2) Reset() {
 	*x = CandidateListV2{}
-	mi := &file_proto_anos_proto_msgTypes[22]
+	mi := &file_proto_anos_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1473,7 +1803,7 @@ func (x *CandidateListV2) String() string {
 func (*CandidateListV2) ProtoMessage() {}
 
 func (x *CandidateListV2) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[22]
+	mi := &file_proto_anos_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1486,7 +1816,7 @@ func (x *CandidateListV2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CandidateListV2.ProtoReflect.Descriptor instead.
 func (*CandidateListV2) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{22}
+	return file_proto_anos_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CandidateListV2) GetEpoch() uint64 {
@@ -1541,7 +1871,7 @@ type EpochFinalization struct {
 
 func (x *EpochFinalization) Reset() {
 	*x = EpochFinalization{}
-	mi := &file_proto_anos_proto_msgTypes[23]
+	mi := &file_proto_anos_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1553,7 +1883,7 @@ func (x *EpochFinalization) String() string {
 func (*EpochFinalization) ProtoMessage() {}
 
 func (x *EpochFinalization) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[23]
+	mi := &file_proto_anos_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1566,7 +1896,7 @@ func (x *EpochFinalization) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EpochFinalization.ProtoReflect.Descriptor instead.
 func (*EpochFinalization) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{23}
+	return file_proto_anos_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *EpochFinalization) GetEpoch() uint64 {
@@ -1619,7 +1949,7 @@ type SyncLatestRequest struct {
 
 func (x *SyncLatestRequest) Reset() {
 	*x = SyncLatestRequest{}
-	mi := &file_proto_anos_proto_msgTypes[24]
+	mi := &file_proto_anos_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1631,7 +1961,7 @@ func (x *SyncLatestRequest) String() string {
 func (*SyncLatestRequest) ProtoMessage() {}
 
 func (x *SyncLatestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[24]
+	mi := &file_proto_anos_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1644,7 +1974,7 @@ func (x *SyncLatestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncLatestRequest.ProtoReflect.Descriptor instead.
 func (*SyncLatestRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{24}
+	return file_proto_anos_proto_rawDescGZIP(), []int{29}
 }
 
 type SyncLatestResponse struct {
@@ -1656,7 +1986,7 @@ type SyncLatestResponse struct {
 
 func (x *SyncLatestResponse) Reset() {
 	*x = SyncLatestResponse{}
-	mi := &file_proto_anos_proto_msgTypes[25]
+	mi := &file_proto_anos_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1668,7 +1998,7 @@ func (x *SyncLatestResponse) String() string {
 func (*SyncLatestResponse) ProtoMessage() {}
 
 func (x *SyncLatestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[25]
+	mi := &file_proto_anos_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1681,7 +2011,7 @@ func (x *SyncLatestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncLatestResponse.ProtoReflect.Descriptor instead.
 func (*SyncLatestResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{25}
+	return file_proto_anos_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SyncLatestResponse) GetLatestEpoch() uint64 {
@@ -1700,7 +2030,7 @@ type SyncFinalizationRequest struct {
 
 func (x *SyncFinalizationRequest) Reset() {
 	*x = SyncFinalizationRequest{}
-	mi := &file_proto_anos_proto_msgTypes[26]
+	mi := &file_proto_anos_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +2042,7 @@ func (x *SyncFinalizationRequest) String() string {
 func (*SyncFinalizationRequest) ProtoMessage() {}
 
 func (x *SyncFinalizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[26]
+	mi := &file_proto_anos_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +2055,7 @@ func (x *SyncFinalizationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncFinalizationRequest.ProtoReflect.Descriptor instead.
 func (*SyncFinalizationRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{26}
+	return file_proto_anos_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SyncFinalizationRequest) GetEpoch() uint64 {
@@ -1744,7 +2074,7 @@ type SyncFinalizationResponse struct {
 
 func (x *SyncFinalizationResponse) Reset() {
 	*x = SyncFinalizationResponse{}
-	mi := &file_proto_anos_proto_msgTypes[27]
+	mi := &file_proto_anos_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1756,7 +2086,7 @@ func (x *SyncFinalizationResponse) String() string {
 func (*SyncFinalizationResponse) ProtoMessage() {}
 
 func (x *SyncFinalizationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[27]
+	mi := &file_proto_anos_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1769,7 +2099,7 @@ func (x *SyncFinalizationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncFinalizationResponse.ProtoReflect.Descriptor instead.
 func (*SyncFinalizationResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{27}
+	return file_proto_anos_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SyncFinalizationResponse) GetFinalizations() []*EpochFinalization {
@@ -1789,7 +2119,7 @@ type FrontierEntry struct {
 
 func (x *FrontierEntry) Reset() {
 	*x = FrontierEntry{}
-	mi := &file_proto_anos_proto_msgTypes[28]
+	mi := &file_proto_anos_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1801,7 +2131,7 @@ func (x *FrontierEntry) String() string {
 func (*FrontierEntry) ProtoMessage() {}
 
 func (x *FrontierEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[28]
+	mi := &file_proto_anos_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1814,7 +2144,7 @@ func (x *FrontierEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FrontierEntry.ProtoReflect.Descriptor instead.
 func (*FrontierEntry) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{28}
+	return file_proto_anos_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *FrontierEntry) GetAccount() *AccountId {
@@ -1842,7 +2172,7 @@ type SyncFrontiersRequest struct {
 
 func (x *SyncFrontiersRequest) Reset() {
 	*x = SyncFrontiersRequest{}
-	mi := &file_proto_anos_proto_msgTypes[29]
+	mi := &file_proto_anos_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1854,7 +2184,7 @@ func (x *SyncFrontiersRequest) String() string {
 func (*SyncFrontiersRequest) ProtoMessage() {}
 
 func (x *SyncFrontiersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[29]
+	mi := &file_proto_anos_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1867,7 +2197,7 @@ func (x *SyncFrontiersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncFrontiersRequest.ProtoReflect.Descriptor instead.
 func (*SyncFrontiersRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{29}
+	return file_proto_anos_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *SyncFrontiersRequest) GetEpoch() uint64 {
@@ -1902,7 +2232,7 @@ type SyncFrontiersResponse struct {
 
 func (x *SyncFrontiersResponse) Reset() {
 	*x = SyncFrontiersResponse{}
-	mi := &file_proto_anos_proto_msgTypes[30]
+	mi := &file_proto_anos_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1914,7 +2244,7 @@ func (x *SyncFrontiersResponse) String() string {
 func (*SyncFrontiersResponse) ProtoMessage() {}
 
 func (x *SyncFrontiersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[30]
+	mi := &file_proto_anos_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1927,7 +2257,7 @@ func (x *SyncFrontiersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncFrontiersResponse.ProtoReflect.Descriptor instead.
 func (*SyncFrontiersResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{30}
+	return file_proto_anos_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SyncFrontiersResponse) GetEpoch() uint64 {
@@ -1963,7 +2293,7 @@ type SyncChainRequest struct {
 
 func (x *SyncChainRequest) Reset() {
 	*x = SyncChainRequest{}
-	mi := &file_proto_anos_proto_msgTypes[31]
+	mi := &file_proto_anos_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1975,7 +2305,7 @@ func (x *SyncChainRequest) String() string {
 func (*SyncChainRequest) ProtoMessage() {}
 
 func (x *SyncChainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[31]
+	mi := &file_proto_anos_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1988,7 +2318,7 @@ func (x *SyncChainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncChainRequest.ProtoReflect.Descriptor instead.
 func (*SyncChainRequest) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{31}
+	return file_proto_anos_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SyncChainRequest) GetAccount() *AccountId {
@@ -2029,7 +2359,7 @@ type SyncChainResponse struct {
 
 func (x *SyncChainResponse) Reset() {
 	*x = SyncChainResponse{}
-	mi := &file_proto_anos_proto_msgTypes[32]
+	mi := &file_proto_anos_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2041,7 +2371,7 @@ func (x *SyncChainResponse) String() string {
 func (*SyncChainResponse) ProtoMessage() {}
 
 func (x *SyncChainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_anos_proto_msgTypes[32]
+	mi := &file_proto_anos_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2054,7 +2384,7 @@ func (x *SyncChainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncChainResponse.ProtoReflect.Descriptor instead.
 func (*SyncChainResponse) Descriptor() ([]byte, []int) {
-	return file_proto_anos_proto_rawDescGZIP(), []int{32}
+	return file_proto_anos_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *SyncChainResponse) GetTx() []*Tx {
@@ -2091,7 +2421,22 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x03fee\x18\x03 \x01(\x04R\x03fee\x124\n" +
 	"\rreceivable_id\x18\x04 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\"E\n" +
 	"\rTxBodyReceive\x124\n" +
-	"\rreceivable_id\x18\x01 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\"\xfd\x01\n" +
+	"\rreceivable_id\x18\x01 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\"=\n" +
+	"\x13TxBodyAddArbitrator\x12&\n" +
+	"\x06pubkey\x18\x01 \x01(\v2\x0e.anos.v2.Pub32R\x06pubkey\"@\n" +
+	"\x16TxBodyRemoveArbitrator\x12&\n" +
+	"\x06pubkey\x18\x01 \x01(\v2\x0e.anos.v2.Pub32R\x06pubkey\"X\n" +
+	"\bMultiSig\x12(\n" +
+	"\apubkeys\x18\x01 \x03(\v2\x0e.anos.v2.Pub32R\apubkeys\x12\"\n" +
+	"\x04sigs\x18\x02 \x03(\v2\x0e.anos.v2.Sig64R\x04sigs\"S\n" +
+	"\tSignerSet\x12(\n" +
+	"\apubkeys\x18\x01 \x03(\v2\x0e.anos.v2.Pub32R\apubkeys\x12\x1c\n" +
+	"\tthreshold\x18\x02 \x01(\rR\tthreshold\"\x82\x01\n" +
+	"\x14GetSignerSetResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x121\n" +
+	"\n" +
+	"signer_set\x18\x02 \x01(\v2\x12.anos.v2.SignerSetR\tsignerSet\x12'\n" +
+	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error\"\x94\x03\n" +
 	"\n" +
 	"TxSignable\x12#\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x0f.anos.v2.TxTypeR\x04type\x12,\n" +
@@ -2100,8 +2445,10 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x03seq\x18\x04 \x01(\x04R\x03seq\x12)\n" +
 	"\x04send\x18\n" +
 	" \x01(\v2\x13.anos.v2.TxBodySendH\x00R\x04send\x122\n" +
-	"\areceive\x18\v \x01(\v2\x16.anos.v2.TxBodyReceiveH\x00R\areceiveB\x06\n" +
-	"\x04body\"\x97\x02\n" +
+	"\areceive\x18\v \x01(\v2\x16.anos.v2.TxBodyReceiveH\x00R\areceive\x12E\n" +
+	"\x0eadd_arbitrator\x18\f \x01(\v2\x1c.anos.v2.TxBodyAddArbitratorH\x00R\raddArbitrator\x12N\n" +
+	"\x11remove_arbitrator\x18\r \x01(\v2\x1f.anos.v2.TxBodyRemoveArbitratorH\x00R\x10removeArbitratorB\x06\n" +
+	"\x04body\"\xde\x03\n" +
 	"\x02Tx\x12#\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x0f.anos.v2.TxTypeR\x04type\x12,\n" +
 	"\aaccount\x18\x02 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\x12#\n" +
@@ -2109,8 +2456,11 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x03seq\x18\x04 \x01(\x04R\x03seq\x12)\n" +
 	"\x04send\x18\n" +
 	" \x01(\v2\x13.anos.v2.TxBodySendH\x00R\x04send\x122\n" +
-	"\areceive\x18\v \x01(\v2\x16.anos.v2.TxBodyReceiveH\x00R\areceive\x12 \n" +
-	"\x03sig\x18\x14 \x01(\v2\x0e.anos.v2.Sig64R\x03sigB\x06\n" +
+	"\areceive\x18\v \x01(\v2\x16.anos.v2.TxBodyReceiveH\x00R\areceive\x12E\n" +
+	"\x0eadd_arbitrator\x18\f \x01(\v2\x1c.anos.v2.TxBodyAddArbitratorH\x00R\raddArbitrator\x12N\n" +
+	"\x11remove_arbitrator\x18\r \x01(\v2\x1f.anos.v2.TxBodyRemoveArbitratorH\x00R\x10removeArbitrator\x12 \n" +
+	"\x03sig\x18\x14 \x01(\v2\x0e.anos.v2.Sig64R\x03sig\x12.\n" +
+	"\tmulti_sig\x18\x15 \x01(\v2\x11.anos.v2.MultiSigR\bmultiSigB\x06\n" +
 	"\x04body\"\xa7\x02\n" +
 	"\n" +
 	"Receivable\x12\x1f\n" +
@@ -2211,11 +2561,13 @@ const file_proto_anos_proto_rawDesc = "" +
 	"max_blocks\x18\x04 \x01(\rR\tmaxBlocks\"S\n" +
 	"\x11SyncChainResponse\x12\x1b\n" +
 	"\x02tx\x18\x01 \x03(\v2\v.anos.v2.TxR\x02tx\x12!\n" +
-	"\freached_have\x18\x02 \x01(\bR\vreachedHave*H\n" +
+	"\freached_have\x18\x02 \x01(\bR\vreachedHave*\x83\x01\n" +
 	"\x06TxType\x12\x17\n" +
 	"\x13TX_TYPE_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fTX_TYPE_SEND\x10\x01\x12\x13\n" +
-	"\x0fTX_TYPE_RECEIVE\x10\x02B\x18Z\x16anos/internal/proto;pbb\x06proto3"
+	"\x0fTX_TYPE_RECEIVE\x10\x02\x12\x1a\n" +
+	"\x16TX_TYPE_ADD_ARBITRATOR\x10\x03\x12\x1d\n" +
+	"\x19TX_TYPE_REMOVE_ARBITRATOR\x10\x04B\x18Z\x16anos/internal/proto;pbb\x06proto3"
 
 var (
 	file_proto_anos_proto_rawDescOnce sync.Once
@@ -2230,7 +2582,7 @@ func file_proto_anos_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_anos_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_anos_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_proto_anos_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_proto_anos_proto_goTypes = []any{
 	(TxType)(0),                      // 0: anos.v2.TxType
 	(*Hash32)(nil),                   // 1: anos.v2.Hash32
@@ -2239,97 +2591,114 @@ var file_proto_anos_proto_goTypes = []any{
 	(*AccountId)(nil),                // 4: anos.v2.AccountId
 	(*TxBodySend)(nil),               // 5: anos.v2.TxBodySend
 	(*TxBodyReceive)(nil),            // 6: anos.v2.TxBodyReceive
-	(*TxSignable)(nil),               // 7: anos.v2.TxSignable
-	(*Tx)(nil),                       // 8: anos.v2.Tx
-	(*Receivable)(nil),               // 9: anos.v2.Receivable
-	(*EpochRecord)(nil),              // 10: anos.v2.EpochRecord
-	(*ApiError)(nil),                 // 11: anos.v2.ApiError
-	(*SubmitTxRequest)(nil),          // 12: anos.v2.SubmitTxRequest
-	(*SubmitTxResponse)(nil),         // 13: anos.v2.SubmitTxResponse
-	(*AccountState)(nil),             // 14: anos.v2.AccountState
-	(*GetAccountRequest)(nil),        // 15: anos.v2.GetAccountRequest
-	(*GetAccountResponse)(nil),       // 16: anos.v2.GetAccountResponse
-	(*ListReceivablesRequest)(nil),   // 17: anos.v2.ListReceivablesRequest
-	(*ListReceivablesResponse)(nil),  // 18: anos.v2.ListReceivablesResponse
-	(*SigDER)(nil),                   // 19: anos.v2.SigDER
-	(*TxInv)(nil),                    // 20: anos.v2.TxInv
-	(*TxWant)(nil),                   // 21: anos.v2.TxWant
-	(*TxPush)(nil),                   // 22: anos.v2.TxPush
-	(*CandidateListV2)(nil),          // 23: anos.v2.CandidateListV2
-	(*EpochFinalization)(nil),        // 24: anos.v2.EpochFinalization
-	(*SyncLatestRequest)(nil),        // 25: anos.v2.SyncLatestRequest
-	(*SyncLatestResponse)(nil),       // 26: anos.v2.SyncLatestResponse
-	(*SyncFinalizationRequest)(nil),  // 27: anos.v2.SyncFinalizationRequest
-	(*SyncFinalizationResponse)(nil), // 28: anos.v2.SyncFinalizationResponse
-	(*FrontierEntry)(nil),            // 29: anos.v2.FrontierEntry
-	(*SyncFrontiersRequest)(nil),     // 30: anos.v2.SyncFrontiersRequest
-	(*SyncFrontiersResponse)(nil),    // 31: anos.v2.SyncFrontiersResponse
-	(*SyncChainRequest)(nil),         // 32: anos.v2.SyncChainRequest
-	(*SyncChainResponse)(nil),        // 33: anos.v2.SyncChainResponse
+	(*TxBodyAddArbitrator)(nil),      // 7: anos.v2.TxBodyAddArbitrator
+	(*TxBodyRemoveArbitrator)(nil),   // 8: anos.v2.TxBodyRemoveArbitrator
+	(*MultiSig)(nil),                 // 9: anos.v2.MultiSig
+	(*SignerSet)(nil),                // 10: anos.v2.SignerSet
+	(*GetSignerSetResponse)(nil),     // 11: anos.v2.GetSignerSetResponse
+	(*TxSignable)(nil),               // 12: anos.v2.TxSignable
+	(*Tx)(nil),                       // 13: anos.v2.Tx
+	(*Receivable)(nil),               // 14: anos.v2.Receivable
+	(*EpochRecord)(nil),              // 15: anos.v2.EpochRecord
+	(*ApiError)(nil),                 // 16: anos.v2.ApiError
+	(*SubmitTxRequest)(nil),          // 17: anos.v2.SubmitTxRequest
+	(*SubmitTxResponse)(nil),         // 18: anos.v2.SubmitTxResponse
+	(*AccountState)(nil),             // 19: anos.v2.AccountState
+	(*GetAccountRequest)(nil),        // 20: anos.v2.GetAccountRequest
+	(*GetAccountResponse)(nil),       // 21: anos.v2.GetAccountResponse
+	(*ListReceivablesRequest)(nil),   // 22: anos.v2.ListReceivablesRequest
+	(*ListReceivablesResponse)(nil),  // 23: anos.v2.ListReceivablesResponse
+	(*SigDER)(nil),                   // 24: anos.v2.SigDER
+	(*TxInv)(nil),                    // 25: anos.v2.TxInv
+	(*TxWant)(nil),                   // 26: anos.v2.TxWant
+	(*TxPush)(nil),                   // 27: anos.v2.TxPush
+	(*CandidateListV2)(nil),          // 28: anos.v2.CandidateListV2
+	(*EpochFinalization)(nil),        // 29: anos.v2.EpochFinalization
+	(*SyncLatestRequest)(nil),        // 30: anos.v2.SyncLatestRequest
+	(*SyncLatestResponse)(nil),       // 31: anos.v2.SyncLatestResponse
+	(*SyncFinalizationRequest)(nil),  // 32: anos.v2.SyncFinalizationRequest
+	(*SyncFinalizationResponse)(nil), // 33: anos.v2.SyncFinalizationResponse
+	(*FrontierEntry)(nil),            // 34: anos.v2.FrontierEntry
+	(*SyncFrontiersRequest)(nil),     // 35: anos.v2.SyncFrontiersRequest
+	(*SyncFrontiersResponse)(nil),    // 36: anos.v2.SyncFrontiersResponse
+	(*SyncChainRequest)(nil),         // 37: anos.v2.SyncChainRequest
+	(*SyncChainResponse)(nil),        // 38: anos.v2.SyncChainResponse
 }
 var file_proto_anos_proto_depIdxs = []int32{
 	4,  // 0: anos.v2.TxBodySend.to:type_name -> anos.v2.AccountId
 	1,  // 1: anos.v2.TxBodySend.receivable_id:type_name -> anos.v2.Hash32
 	1,  // 2: anos.v2.TxBodyReceive.receivable_id:type_name -> anos.v2.Hash32
-	0,  // 3: anos.v2.TxSignable.type:type_name -> anos.v2.TxType
-	4,  // 4: anos.v2.TxSignable.account:type_name -> anos.v2.AccountId
-	1,  // 5: anos.v2.TxSignable.prev:type_name -> anos.v2.Hash32
-	5,  // 6: anos.v2.TxSignable.send:type_name -> anos.v2.TxBodySend
-	6,  // 7: anos.v2.TxSignable.receive:type_name -> anos.v2.TxBodyReceive
-	0,  // 8: anos.v2.Tx.type:type_name -> anos.v2.TxType
-	4,  // 9: anos.v2.Tx.account:type_name -> anos.v2.AccountId
-	1,  // 10: anos.v2.Tx.prev:type_name -> anos.v2.Hash32
-	5,  // 11: anos.v2.Tx.send:type_name -> anos.v2.TxBodySend
-	6,  // 12: anos.v2.Tx.receive:type_name -> anos.v2.TxBodyReceive
-	2,  // 13: anos.v2.Tx.sig:type_name -> anos.v2.Sig64
-	1,  // 14: anos.v2.Receivable.id:type_name -> anos.v2.Hash32
-	4,  // 15: anos.v2.Receivable.from:type_name -> anos.v2.AccountId
-	4,  // 16: anos.v2.Receivable.to:type_name -> anos.v2.AccountId
-	1,  // 17: anos.v2.Receivable.created_by_tx:type_name -> anos.v2.Hash32
-	1,  // 18: anos.v2.Receivable.claimed_by_tx:type_name -> anos.v2.Hash32
-	1,  // 19: anos.v2.EpochRecord.accepted_txs:type_name -> anos.v2.Hash32
-	1,  // 20: anos.v2.EpochRecord.state_root:type_name -> anos.v2.Hash32
-	1,  // 21: anos.v2.EpochRecord.prev_epoch_hash:type_name -> anos.v2.Hash32
-	8,  // 22: anos.v2.SubmitTxRequest.tx:type_name -> anos.v2.Tx
-	1,  // 23: anos.v2.SubmitTxResponse.txid:type_name -> anos.v2.Hash32
-	11, // 24: anos.v2.SubmitTxResponse.error:type_name -> anos.v2.ApiError
-	4,  // 25: anos.v2.AccountState.account:type_name -> anos.v2.AccountId
-	1,  // 26: anos.v2.AccountState.head:type_name -> anos.v2.Hash32
-	4,  // 27: anos.v2.GetAccountRequest.account:type_name -> anos.v2.AccountId
-	14, // 28: anos.v2.GetAccountResponse.state:type_name -> anos.v2.AccountState
-	11, // 29: anos.v2.GetAccountResponse.error:type_name -> anos.v2.ApiError
-	4,  // 30: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
-	9,  // 31: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
-	11, // 32: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
-	3,  // 33: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
-	1,  // 34: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
-	3,  // 35: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
-	1,  // 36: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
-	3,  // 37: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
-	8,  // 38: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
-	3,  // 39: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
-	1,  // 40: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
-	1,  // 41: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
-	19, // 42: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
-	1,  // 43: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
-	1,  // 44: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
-	3,  // 45: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
-	19, // 46: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
-	24, // 47: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
-	4,  // 48: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
-	1,  // 49: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
-	4,  // 50: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
-	29, // 51: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
-	4,  // 52: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
-	4,  // 53: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
-	1,  // 54: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
-	1,  // 55: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
-	8,  // 56: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
-	57, // [57:57] is the sub-list for method output_type
-	57, // [57:57] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	3,  // 3: anos.v2.TxBodyAddArbitrator.pubkey:type_name -> anos.v2.Pub32
+	3,  // 4: anos.v2.TxBodyRemoveArbitrator.pubkey:type_name -> anos.v2.Pub32
+	3,  // 5: anos.v2.MultiSig.pubkeys:type_name -> anos.v2.Pub32
+	2,  // 6: anos.v2.MultiSig.sigs:type_name -> anos.v2.Sig64
+	3,  // 7: anos.v2.SignerSet.pubkeys:type_name -> anos.v2.Pub32
+	10, // 8: anos.v2.GetSignerSetResponse.signer_set:type_name -> anos.v2.SignerSet
+	16, // 9: anos.v2.GetSignerSetResponse.error:type_name -> anos.v2.ApiError
+	0,  // 10: anos.v2.TxSignable.type:type_name -> anos.v2.TxType
+	4,  // 11: anos.v2.TxSignable.account:type_name -> anos.v2.AccountId
+	1,  // 12: anos.v2.TxSignable.prev:type_name -> anos.v2.Hash32
+	5,  // 13: anos.v2.TxSignable.send:type_name -> anos.v2.TxBodySend
+	6,  // 14: anos.v2.TxSignable.receive:type_name -> anos.v2.TxBodyReceive
+	7,  // 15: anos.v2.TxSignable.add_arbitrator:type_name -> anos.v2.TxBodyAddArbitrator
+	8,  // 16: anos.v2.TxSignable.remove_arbitrator:type_name -> anos.v2.TxBodyRemoveArbitrator
+	0,  // 17: anos.v2.Tx.type:type_name -> anos.v2.TxType
+	4,  // 18: anos.v2.Tx.account:type_name -> anos.v2.AccountId
+	1,  // 19: anos.v2.Tx.prev:type_name -> anos.v2.Hash32
+	5,  // 20: anos.v2.Tx.send:type_name -> anos.v2.TxBodySend
+	6,  // 21: anos.v2.Tx.receive:type_name -> anos.v2.TxBodyReceive
+	7,  // 22: anos.v2.Tx.add_arbitrator:type_name -> anos.v2.TxBodyAddArbitrator
+	8,  // 23: anos.v2.Tx.remove_arbitrator:type_name -> anos.v2.TxBodyRemoveArbitrator
+	2,  // 24: anos.v2.Tx.sig:type_name -> anos.v2.Sig64
+	9,  // 25: anos.v2.Tx.multi_sig:type_name -> anos.v2.MultiSig
+	1,  // 26: anos.v2.Receivable.id:type_name -> anos.v2.Hash32
+	4,  // 27: anos.v2.Receivable.from:type_name -> anos.v2.AccountId
+	4,  // 28: anos.v2.Receivable.to:type_name -> anos.v2.AccountId
+	1,  // 29: anos.v2.Receivable.created_by_tx:type_name -> anos.v2.Hash32
+	1,  // 30: anos.v2.Receivable.claimed_by_tx:type_name -> anos.v2.Hash32
+	1,  // 31: anos.v2.EpochRecord.accepted_txs:type_name -> anos.v2.Hash32
+	1,  // 32: anos.v2.EpochRecord.state_root:type_name -> anos.v2.Hash32
+	1,  // 33: anos.v2.EpochRecord.prev_epoch_hash:type_name -> anos.v2.Hash32
+	13, // 34: anos.v2.SubmitTxRequest.tx:type_name -> anos.v2.Tx
+	1,  // 35: anos.v2.SubmitTxResponse.txid:type_name -> anos.v2.Hash32
+	16, // 36: anos.v2.SubmitTxResponse.error:type_name -> anos.v2.ApiError
+	4,  // 37: anos.v2.AccountState.account:type_name -> anos.v2.AccountId
+	1,  // 38: anos.v2.AccountState.head:type_name -> anos.v2.Hash32
+	4,  // 39: anos.v2.GetAccountRequest.account:type_name -> anos.v2.AccountId
+	19, // 40: anos.v2.GetAccountResponse.state:type_name -> anos.v2.AccountState
+	16, // 41: anos.v2.GetAccountResponse.error:type_name -> anos.v2.ApiError
+	4,  // 42: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
+	14, // 43: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
+	16, // 44: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
+	3,  // 45: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
+	1,  // 46: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
+	3,  // 47: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
+	1,  // 48: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
+	3,  // 49: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
+	13, // 50: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
+	3,  // 51: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
+	1,  // 52: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
+	1,  // 53: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
+	24, // 54: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
+	1,  // 55: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
+	1,  // 56: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
+	3,  // 57: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
+	24, // 58: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
+	29, // 59: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
+	4,  // 60: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
+	1,  // 61: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
+	4,  // 62: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
+	34, // 63: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
+	4,  // 64: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
+	4,  // 65: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
+	1,  // 66: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
+	1,  // 67: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
+	13, // 68: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
+	69, // [69:69] is the sub-list for method output_type
+	69, // [69:69] is the sub-list for method input_type
+	69, // [69:69] is the sub-list for extension type_name
+	69, // [69:69] is the sub-list for extension extendee
+	0,  // [0:69] is the sub-list for field type_name
 }
 
 func init() { file_proto_anos_proto_init() }
@@ -2337,13 +2706,17 @@ func file_proto_anos_proto_init() {
 	if File_proto_anos_proto != nil {
 		return
 	}
-	file_proto_anos_proto_msgTypes[6].OneofWrappers = []any{
+	file_proto_anos_proto_msgTypes[11].OneofWrappers = []any{
 		(*TxSignable_Send)(nil),
 		(*TxSignable_Receive)(nil),
+		(*TxSignable_AddArbitrator)(nil),
+		(*TxSignable_RemoveArbitrator)(nil),
 	}
-	file_proto_anos_proto_msgTypes[7].OneofWrappers = []any{
+	file_proto_anos_proto_msgTypes[12].OneofWrappers = []any{
 		(*Tx_Send)(nil),
 		(*Tx_Receive)(nil),
+		(*Tx_AddArbitrator)(nil),
+		(*Tx_RemoveArbitrator)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2351,7 +2724,7 @@ func file_proto_anos_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_anos_proto_rawDesc), len(file_proto_anos_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   33,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

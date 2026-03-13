@@ -53,6 +53,10 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 		tbyte = 0x01
 	case pb.TxType_TX_TYPE_RECEIVE:
 		tbyte = 0x02
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:
+		tbyte = 0x03
+	case pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		tbyte = 0x04
 	default:
 		tbyte = 0x00
 	}
@@ -97,6 +101,24 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 		out = append(out, rb.Receive.ReceivableId.V...)
 		return out, nil
 
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:
+		ab, ok := tx.Body.(*pb.Tx_AddArbitrator)
+		if !ok || ab.AddArbitrator == nil || ab.AddArbitrator.Pubkey == nil || len(ab.AddArbitrator.Pubkey.V) != 32 {
+			return nil, ErrMissingField
+		}
+		out = append(out, 0x03)
+		out = append(out, ab.AddArbitrator.Pubkey.V...)
+		return out, nil
+
+	case pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		rb, ok := tx.Body.(*pb.Tx_RemoveArbitrator)
+		if !ok || rb.RemoveArbitrator == nil || rb.RemoveArbitrator.Pubkey == nil || len(rb.RemoveArbitrator.Pubkey.V) != 32 {
+			return nil, ErrMissingField
+		}
+		out = append(out, 0x04)
+		out = append(out, rb.RemoveArbitrator.Pubkey.V...)
+		return out, nil
+
 	default:
 		// No body
 		out = append(out, 0x00)
@@ -114,38 +136,93 @@ func MsgHash(tx *pb.Tx) ([32]byte, []byte, error) {
 	return h, sb, nil
 }
 
-// VerifyTxSignature verifies tx.sig against MsgHash(tx) using account public key.
+// VerifyTxSignature verifies cryptographic validity of all signatures on a tx.
+// For regular txs: single ed25519 sig against the account pubkey.
+// For arb chain txs: every entry in multi_sig is verified individually.
+// Threshold/quorum policy is checked separately in verify_apply.go.
 func VerifyTxSignature(tx *pb.Tx) error {
 	if tx == nil || tx.Account == nil || len(tx.Account.V) != 32 {
 		return ErrBadLength
-	}
-	if tx.Sig == nil || len(tx.Sig.V) != 64 {
-		return ErrMissingField
 	}
 	h, _, err := MsgHash(tx)
 	if err != nil {
 		return err
 	}
-	pub := ed25519.PublicKey(tx.Account.V)
-	if !ed25519.Verify(pub, h[:], tx.Sig.V) {
-		return errors.New("invalid signature")
+	switch tx.Type {
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR, pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		ms := tx.MultiSig
+		if ms == nil || len(ms.Pubkeys) == 0 {
+			return ErrMissingField
+		}
+		if len(ms.Pubkeys) != len(ms.Sigs) {
+			return errors.New("multisig: pubkeys/sigs length mismatch")
+		}
+		for i, pub := range ms.Pubkeys {
+			if pub == nil || len(pub.V) != 32 {
+				return ErrBadLength
+			}
+			sig := ms.Sigs[i]
+			if sig == nil || len(sig.V) != 64 {
+				return ErrBadLength
+			}
+			if !ed25519.Verify(ed25519.PublicKey(pub.V), h[:], sig.V) {
+				return errors.New("invalid multisig signature")
+			}
+		}
+		return nil
+	default:
+		if tx.Sig == nil || len(tx.Sig.V) != 64 {
+			return ErrMissingField
+		}
+		if !ed25519.Verify(ed25519.PublicKey(tx.Account.V), h[:], tx.Sig.V) {
+			return errors.New("invalid signature")
+		}
+		return nil
 	}
-	return nil
 }
 
-// TxID computes txid = SHA256(sign_bytes || sig) per protocol.
+// TxID computes txid = SHA256(sign_bytes || sig) for regular txs.
+// For multisig arb txs: SHA256(sign_bytes || sorted_concat(all_sigs)).
+// Sorting makes TxID deterministic regardless of sig submission order.
 func TxID(tx *pb.Tx) ([32]byte, error) {
-	if tx == nil || tx.Sig == nil || len(tx.Sig.V) != 64 {
-		return [32]byte{}, ErrMissingField
-	}
 	_, sb, err := MsgHash(tx)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	buf := make([]byte, 0, len(sb)+64)
-	buf = append(buf, sb...)
-	buf = append(buf, tx.Sig.V...)
-	return sha256.Sum256(buf), nil
+	switch tx.Type {
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR, pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		ms := tx.MultiSig
+		if ms == nil || len(ms.Sigs) == 0 {
+			return [32]byte{}, ErrMissingField
+		}
+		sorted := make([][]byte, len(ms.Sigs))
+		for i, s := range ms.Sigs {
+			if s == nil || len(s.V) != 64 {
+				return [32]byte{}, ErrBadLength
+			}
+			sorted[i] = s.V
+		}
+		// Sort lexicographically in-place (simple insertion sort, no import needed).
+		for i := 1; i < len(sorted); i++ {
+			for j := i; j > 0 && bytes.Compare(sorted[j], sorted[j-1]) < 0; j-- {
+				sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+			}
+		}
+		buf := make([]byte, 0, len(sb)+64*len(sorted))
+		buf = append(buf, sb...)
+		for _, s := range sorted {
+			buf = append(buf, s...)
+		}
+		return sha256.Sum256(buf), nil
+	default:
+		if tx.Sig == nil || len(tx.Sig.V) != 64 {
+			return [32]byte{}, ErrMissingField
+		}
+		buf := make([]byte, 0, len(sb)+64)
+		buf = append(buf, sb...)
+		buf = append(buf, tx.Sig.V...)
+		return sha256.Sum256(buf), nil
+	}
 }
 
 // ReceivableIDFromTxID computes receivable_id = SHA256("ANOSv2-Receivable\0" || txid).

@@ -114,6 +114,18 @@ func main() {
 		log.Fatal("GENESIS_SUPPLY_UNITS must be uint64")
 	}
 
+	arbHex := strings.TrimSpace(os.Getenv("GENESIS_ARBITRATOR_HEX"))
+	if arbHex == "" {
+		log.Fatal("GENESIS_ARBITRATOR_HEX is required (32-byte hex ed25519 public key)")
+	}
+	arbBytes, err := hex.DecodeString(arbHex)
+	if err != nil || len(arbBytes) != 32 {
+		log.Fatal("GENESIS_ARBITRATOR_HEX must decode to exactly 32 bytes")
+	}
+	var genesisArbKey [32]byte
+	copy(genesisArbKey[:], arbBytes)
+	fmt.Println("Genesis Arbitrator Key:", hex.EncodeToString(genesisArbKey[:]))
+
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		log.Fatal(err)
@@ -134,6 +146,7 @@ func main() {
 		FundAccount:               fundAcct,
 		GenesisAccount:            genesisAcct,
 		GenesisSupply:             genSupply,
+		GenesisArbitratorPubkey:   genesisArbKey,
 	})
 
 	if err != nil {
@@ -632,6 +645,75 @@ func main() {
 		resp.Receivables = recs
 		resp.Ok = true
 		_ = writeProtoRaw(w, resp)
+	})
+
+	// POST /arbitrator/submit — submit a TX_TYPE_ADD_ARBITRATOR or TX_TYPE_REMOVE_ARBITRATOR
+	mux.HandleFunc("/arbitrator/submit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req pb.SubmitTxRequest
+		if err := readProtoRaw(r.Body, &req); err != nil {
+			http.Error(w, "bad proto", 400)
+			return
+		}
+		if req.Tx == nil {
+			http.Error(w, "missing tx", 400)
+			return
+		}
+		if req.Tx.Type != pb.TxType_TX_TYPE_ADD_ARBITRATOR && req.Tx.Type != pb.TxType_TX_TYPE_REMOVE_ARBITRATOR {
+			http.Error(w, "type must be ADD_ARBITRATOR or REMOVE_ARBITRATOR", 400)
+			return
+		}
+		raw, err := core.CanonicalTxBytes(req.Tx)
+		if err != nil {
+			http.Error(w, "bad tx", 400)
+			return
+		}
+		txid, _ := crypto.TxID(req.Tx)
+		log.Printf("[api] rx /arbitrator/submit txid=%x type=%s", txid[:4], req.Tx.Type.String())
+		resp := &pb.SubmitTxResponse{Ok: false}
+		if err := engine.SubmitTx(raw); err != nil {
+			resp.Error = &pb.ApiError{Code: 400, Message: "reject", Detail: err.Error()}
+			_ = writeProtoRaw(w, resp)
+			return
+		}
+		resp.Txid = &pb.Hash32{V: txid[:]}
+		resp.Ok = true
+		_ = writeProtoRaw(w, resp)
+	})
+
+	// GET /arbitrator/signer-set — returns current signer set as JSON
+	mux.HandleFunc("/arbitrator/signer-set", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		ss, err := engine.GetSignerSetState()
+		if err != nil {
+			http.Error(w, "not found: "+err.Error(), 404)
+			return
+		}
+		head, seq, _ := engine.ArbChainState()
+		type out struct {
+			ArbChainHead string   `json:"arb_chain_head"`
+			ArbChainSeq  uint64   `json:"arb_chain_seq"`
+			Pubkeys      []string `json:"pubkeys"`
+			Threshold    uint32   `json:"threshold"`
+		}
+		resp := out{
+			ArbChainHead: hex.EncodeToString(head[:]),
+			ArbChainSeq:  seq,
+			Threshold:    ss.Threshold,
+		}
+		for _, p := range ss.Pubkeys {
+			if p != nil {
+				resp.Pubkeys = append(resp.Pubkeys, hex.EncodeToString(p.V))
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	// ---- Debug/DB endpoints (JSON) ----

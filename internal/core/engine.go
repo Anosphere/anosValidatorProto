@@ -45,6 +45,10 @@ type EngineConfig struct {
 	FundAccount    [32]byte
 	GenesisAccount [32]byte
 	GenesisSupply  uint64
+
+	// GenesisArbitratorPubkey is the ed25519 pubkey (32 bytes) of the initial arbitrator.
+	// Set via GENESIS_ARBITRATOR_HEX. Must be identical on all validators.
+	GenesisArbitratorPubkey [32]byte
 }
 
 type Engine struct {
@@ -274,6 +278,20 @@ func (e *Engine) ListReceivables(toAcct [32]byte) ([]*pb.Receivable, error) {
 		})
 	})
 	return out, err
+}
+
+// GetSignerSetState returns the current arbitrator SignerSet.
+func (e *Engine) GetSignerSetState() (*pb.SignerSet, error) {
+	return GetSignerSet(e.cfg.DB)
+}
+
+// ArbChainState returns the current arbitrator chain head hash and seq number.
+func (e *Engine) ArbChainState() (head [32]byte, seq uint64, err error) {
+	err = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		head, seq = getArbChain(tx)
+		return nil
+	})
+	return head, seq, err
 }
 
 // ReceiveCandidateList stores a peer candidate list for an epoch after verifying signature and list hash.
@@ -1379,6 +1397,19 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 				return nil
 			})
 		}
+
+		// Load arb chain state into snapshot.
+		snap.ArbHead, snap.ArbSeq = getArbChain(tx)
+		if ss, err := getSignerSetInTx(tx); err == nil {
+			snap.SignerSet = ss
+		}
+		// Inject arb chain as a synthetic AccountSnap so the generic prev/seq
+		// checks in ValidateTxAgainstSnapshot work without special-casing.
+		snap.Accounts[ArbChainID] = AccountSnap{
+			Head: snap.ArbHead,
+			Seq:  snap.ArbSeq,
+		}
+
 		return nil
 	})
 	return snap, err
@@ -1891,34 +1922,47 @@ func (e *Engine) cleanupAfterEpoch(
 
 func (e *Engine) ensureGenesisOnBoot() error {
 	gen := e.cfg.GenesisAccount
-
 	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
 
+		// --- Regular account genesis (unchanged logic) ---
 		head, bal, seq := getAccount(tx, gen)
-
-		// If already initialized (non-zero head and seq>=1), done.
 		var zero [32]byte
-		if head != zero && seq >= 1 {
-			return nil
+		if head == zero || seq < 1 {
+			if bal == 0 {
+				bal = e.cfg.GenesisSupply
+			}
+			h := sha256.Sum256(append([]byte("ANOS_GENESIS_HEAD_V1:"), gen[:]...))
+			head = h
+			if seq < 1 {
+				seq = 1
+			}
+			if err := putAccount(tx, gen, head, bal, seq); err != nil {
+				return err
+			}
 		}
 
-		// If no balance yet, set to configured supply.
-		if bal == 0 {
-			bal = e.cfg.GenesisSupply
+		// --- Arbitrator genesis (idempotent) ---
+		existing, err := getSignerSetInTx(tx)
+		if err != nil || existing == nil || len(existing.Pubkeys) == 0 {
+			if e.cfg.GenesisArbitratorPubkey == zero {
+				return errors.New("GenesisArbitratorPubkey must be set (GENESIS_ARBITRATOR_HEX)")
+			}
+			ss := &pb.SignerSet{
+				Pubkeys:   []*pb.Pub32{{V: append([]byte(nil), e.cfg.GenesisArbitratorPubkey[:]...)}},
+				Threshold: 1,
+			}
+			if err := putSignerSet(tx, ss); err != nil {
+				return err
+			}
+			arbGenesisHead := sha256.Sum256(append([]byte("ANOS_ARB_CHAIN_GENESIS_V1:"), ArbChainID[:]...))
+			if err := putArbChain(tx, arbGenesisHead, 1); err != nil {
+				return err
+			}
+			log.Printf("[genesis] arb signer set bootstrapped key=%x", e.cfg.GenesisArbitratorPubkey[:4])
 		}
-
-		// Create a deterministic “genesis head” (doesn't require a new tx type)
-		// This is just an anchor so first real spend uses prev=head and seq=2.
-		h := sha256.Sum256(append([]byte("ANOS_GENESIS_HEAD_V1:"), gen[:]...))
-
-		head = h
-		if seq < 1 {
-			seq = 1
-		}
-
-		return putAccount(tx, gen, head, bal, seq)
+		return nil
 	})
 }
