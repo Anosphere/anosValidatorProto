@@ -130,9 +130,6 @@ func ValidateTxAgainstSnapshot(tx *pb.Tx, snap *Snapshot) ([32]byte, error) {
 // ApplyTx applies a validated tx to DB state.
 // It assumes prev/seq correctness was checked against snapshot and updates haven't happened mid-commit.
 func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAcct [32]byte) error {
-	if hasTx(view.tx, txid) {
-		return nil
-	}
 	if parsed.Account == nil || len(parsed.Account.V) != 32 {
 		return errors.New("bad account")
 	}
@@ -149,16 +146,23 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAc
 		head, bal, seq = getAccount(view.tx, acct)
 	}
 
+	// If this tx is already the current tip for this chain, treat it as already applied.
+	// Do NOT skip merely because the raw tx bytes already exist in BTxs: during resync
+	// we can have tx bytes present without the corresponding chain state having advanced.
+	if head == txid && seq == parsed.Seq {
+		return nil
+	}
+
 	// prev compare: nil/empty => zeros
 	var prev [32]byte
 	if parsed.Prev != nil && len(parsed.Prev.V) == 32 {
 		copy(prev[:], parsed.Prev.V)
 	}
 	if head != prev {
-		return fmt.Errorf("apply bad prev: have %x want %x", head[:4], prev[:4])
+		return fmt.Errorf("%w: have %x want %x", ErrBadPrev, head[:4], prev[:4])
 	}
 	if parsed.Seq != seq+1 {
-		return fmt.Errorf("apply bad seq: have %d want %d", seq, parsed.Seq-1)
+		return fmt.Errorf("%w: have %d want %d", ErrBadSeq, seq, parsed.Seq-1)
 	}
 
 	switch parsed.Type {
@@ -351,7 +355,7 @@ func checkFullQuorum(ms *pb.MultiSig, ss *pb.SignerSet) error {
 }
 
 func applyArbTx(tx *bbolt.Tx, raw []byte, parsed *pb.Tx, txid [32]byte) error {
-	ss, err := getSignerSetInTx(tx)
+	ss, _, err := getSignerSetInTx(tx)
 	if err != nil {
 		return fmt.Errorf("applyArbTx: cannot read signer set: %w", err)
 	}

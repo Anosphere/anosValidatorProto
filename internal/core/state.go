@@ -211,6 +211,9 @@ func epochFrontierKey(epoch uint64, acct [32]byte) []byte {
 
 // SaveEpochFrontiers snapshots the current BAccounts heads into BEpochFrontiers for this epoch.
 // Call this immediately after applying winners (post-state).
+// SaveEpochFrontiers snapshots the current post-state heads into BEpochFrontiers for this epoch.
+// This includes both normal account heads from BAccounts and the synthetic arbitrator-chain head
+// under ArbChainID so frontier roots fully represent canonical state.
 func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
 	return db.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
@@ -234,6 +237,14 @@ func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
 				return err
 			}
 		}
+
+		// Also snapshot the arbitrator chain as a synthetic account frontier.
+		arbHead, _ := getArbChain(tx)
+		arbID := ArbChainID
+		if err := out.Put(epochFrontierKey(epoch, arbID), arbHead[:]); err != nil {
+			return err
+		}
+
 		return nil
 	})
 }
@@ -340,27 +351,35 @@ func ComputeFrontiersRoot(db *bbolt.DB, epoch uint64) ([32]byte, error) {
 // ComputeDryRunFrontiersRoot computes what the frontiers root would be if the
 // given winners were applied, without actually writing to the DB.
 // winners maps account -> txid (the new head after apply).
+// ComputeDryRunFrontiersRoot computes what the frontiers root would be if the
+// given winners were applied, without actually writing to the DB.
+// winners maps account -> txid (the new head after apply).
 func ComputeDryRunFrontiersRoot(db *bbolt.DB, winners map[[32]byte][32]byte) ([32]byte, error) {
-	// 1. Read all current account->head pairs from DB
+	// 1. Read all current frontier heads from DB.
 	frontiers := make(map[[32]byte][32]byte)
 	err := db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(BAccounts)
-		if b == nil {
-			return nil
-		}
-		c := b.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			if len(k) != 32 {
-				continue
+		if b != nil {
+			c := b.Cursor()
+			for k, v := c.First(); k != nil; k, v = c.Next() {
+				if len(k) != 32 {
+					continue
+				}
+				head, _, _, ok := unpackAccount(v)
+				if !ok {
+					continue
+				}
+				var acct [32]byte
+				copy(acct[:], k)
+				frontiers[acct] = head
 			}
-			head, _, _, ok := unpackAccount(v)
-			if !ok {
-				continue
-			}
-			var acct [32]byte
-			copy(acct[:], k)
-			frontiers[acct] = head
 		}
+
+		// Include arbitrator chain as a synthetic frontier.
+		arbID := ArbChainID
+		arbHead, _ := getArbChain(tx)
+		frontiers[arbID] = arbHead
+
 		return nil
 	})
 	if err != nil {
@@ -466,20 +485,20 @@ func putSignerSet(tx *bbolt.Tx, ss *pb.SignerSet) error {
 	return tx.Bucket(BSignerSets).Put(id[:], raw)
 }
 
-// getSignerSetInTx reads the SignerSet within an existing bbolt transaction.
-func getSignerSetInTx(tx *bbolt.Tx) (*pb.SignerSet, error) {
+func getSignerSetInTx(tx *bbolt.Tx) (*pb.SignerSet, bool, error) {
 	b := tx.Bucket(BSignerSets)
 	if b == nil {
-		return nil, ErrNotFound
+		return nil, false, nil
 	}
-	id := ArbChainID
-	raw := b.Get(id[:])
-	if raw == nil {
-		return nil, ErrNotFound
+
+	v := b.Get(ArbChainID[:])
+	if len(v) == 0 {
+		return nil, false, nil
 	}
+
 	var ss pb.SignerSet
-	if err := proto.Unmarshal(raw, &ss); err != nil {
-		return nil, err
+	if err := proto.Unmarshal(v, &ss); err != nil {
+		return nil, false, err
 	}
-	return &ss, nil
+	return &ss, true, nil
 }
