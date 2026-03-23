@@ -43,31 +43,19 @@ func main() {
 		log.Fatal("GENESIS_UNIX_MS is required (milliseconds since unix epoch); must be identical on all validators")
 	}
 
-	kmsKey := strings.TrimSpace(os.Getenv("KMS_KEY_NAME"))
-
 	var signer core.ValidatorSigner
 	var selfID [33]byte
 
-	if kmsKey != "" {
-		kmsSigner, err := core.NewKMSSigner(ctx, kmsKey)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer kmsSigner.Close()
-		signer = kmsSigner
-		selfID = kmsSigner.PublicKeyCompressed()
-	} else {
-		privHex := strings.TrimSpace(os.Getenv("VALIDATOR_ECDSA_PRIV"))
-		if privHex == "" {
-			log.Fatal("VALIDATOR_ECDSA_PRIV is required (32-byte hex scalar D) when KMS_KEY_NAME is not set")
-		}
-		privECDSA, err := crypto.LoadP256PrivateKeyFromHex(privHex)
-		if err != nil {
-			log.Fatalf("VALIDATOR_ECDSA_PRIV invalid: %v", err)
-		}
-		selfID = crypto.CompressP256PublicKey(&privECDSA.PublicKey)
-		signer = core.NewLocalP256Signer(privECDSA)
+	keyPath := strings.TrimSpace(os.Getenv("VALIDATOR_KEY_PATH"))
+	if keyPath == "" {
+		log.Fatal("VALIDATOR_KEY_PATH is required (path to PEM or hex private key file)")
 	}
+	privECDSA, err := crypto.LoadP256PrivateKeyFromFile(keyPath)
+	if err != nil {
+		log.Fatalf("failed to load private key from %q: %v", keyPath, err)
+	}
+	selfID = crypto.CompressP256PublicKey(&privECDSA.PublicKey)
+	signer = core.NewLocalP256Signer(privECDSA)
 
 	fmt.Println("Validator Public Key:", hex.EncodeToString(selfID[:]))
 
