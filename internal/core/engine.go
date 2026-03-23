@@ -45,6 +45,10 @@ type EngineConfig struct {
 	FundAccount    [32]byte
 	GenesisAccount [32]byte
 	GenesisSupply  uint64
+
+	// GenesisArbitratorPubkey is the ed25519 pubkey (32 bytes) of the initial arbitrator.
+	// Set via GENESIS_ARBITRATOR_HEX. Must be identical on all validators.
+	GenesisArbitratorPubkey [32]byte
 }
 
 type Engine struct {
@@ -274,6 +278,20 @@ func (e *Engine) ListReceivables(toAcct [32]byte) ([]*pb.Receivable, error) {
 		})
 	})
 	return out, err
+}
+
+// GetSignerSetState returns the current arbitrator SignerSet.
+func (e *Engine) GetSignerSetState() (*pb.SignerSet, error) {
+	return GetSignerSet(e.cfg.DB)
+}
+
+// ArbChainState returns the current arbitrator chain head hash and seq number.
+func (e *Engine) ArbChainState() (head [32]byte, seq uint64, err error) {
+	err = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		head, seq = getArbChain(tx)
+		return nil
+	})
+	return head, seq, err
 }
 
 // ReceiveCandidateList stores a peer candidate list for an epoch after verifying signature and list hash.
@@ -555,6 +573,9 @@ func (e *Engine) ReceiveFinalization(fin *pb.EpochFinalization) error {
 // SyncChain returns raw tx bytes walking backwards from targetHead (inclusive).
 // Stops if it reaches `have` (if non-zero) or hits max blocks or missing tx bytes.
 // Returns (txsHeadBackwards, reachedHave).
+//
+// accountID is used only for diagnostics / special synthetic-anchor handling;
+// tx bytes themselves are always read from BTxs.
 func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byte, max int) ([][]byte, bool) {
 	log.Printf("SYNCCHAIN ENGINE CALLED acct=%x target=%x have=%x max=%d", accountID[:4], targetHead[:4], have[:4], max)
 	if max <= 0 {
@@ -563,6 +584,8 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 
 	var out [][]byte
 	reachedHave := false
+	arbID := ArbChainID
+	arbGenesisHead := sha256.Sum256(append([]byte("ANOS_ARB_CHAIN_GENESIS_V1:"), ArbChainID[:]...))
 
 	if err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
 		if tx.Bucket(BTxs) == nil {
@@ -571,64 +594,71 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 
 		cur := targetHead
 		for i := 0; i < max; i++ {
-			// stop if we hit have (and have != zero)
-			if have != ([32]byte{}) && bytes.Equal(cur[:], have[:]) {
+			if have != ([32]byte{}) && cur == have {
 				reachedHave = true
 				break
 			}
 
 			raw, err := getTxRaw(tx, cur)
 			if err != nil {
-				// If the caller did not specify a boundary (have==zero) and the targetHead
-				// isn't a stored tx, treat this as reaching the effective base.
-				// This covers synthetic anchors (e.g. genesis head) that are not in BTxs.
-				if have == ([32]byte{}) {
+				// Missing current head bytes is only acceptable if this exact hash is the requested boundary.
+				if have != ([32]byte{}) && cur == have {
 					reachedHave = true
 				}
-				log.Printf("SYNCCHAIN head missing cur=%x have=%x reached=%v", cur[:4], have[:4], have == ([32]byte{}))
+				log.Printf("SYNCCHAIN head missing acct=%x cur=%x have=%x reached=%v", accountID[:4], cur[:4], have[:4], reachedHave)
 				break
 			}
+
 			out = append(out, raw)
 
 			ptx, err := ParseTx(raw)
 			if err != nil {
+				log.Printf("SYNCCHAIN parse error acct=%x cur=%x: %v", accountID[:4], cur[:4], err)
 				break
 			}
 
-			// Your Tx uses Prev (not PrevHash)
 			if ptx.Prev == nil || len(ptx.Prev.V) != 32 {
+				log.Printf("SYNCCHAIN missing prev acct=%x cur=%x", accountID[:4], cur[:4])
 				break
 			}
+
 			var prev [32]byte
 			copy(prev[:], ptx.Prev.V)
 
-			// If caller asked for a boundary "have", we can consider it reached
-			// when the current tx's Prev points to that boundary.
-			// This is important when "have" is a synthetic anchor (e.g. GENESIS_HEAD)
-			// that is not an actual stored tx.
-			if have != ([32]byte{}) && bytes.Equal(prev[:], have[:]) {
+			if have != ([32]byte{}) && prev == have {
 				reachedHave = true
 				break
 			}
 
-			// stop at zero prev (open/genesis boundary)
-			var z [32]byte
-			if bytes.Equal(prev[:], z[:]) {
-				// If caller did not specify a "have" boundary (have==zero),
-				// then reaching chain start means we've reached the boundary.
+			if prev == ([32]byte{}) {
 				if have == ([32]byte{}) {
 					reachedHave = true
 				}
 				break
 			}
 
-			// If have is unset (zero) and the previous link isn't actually stored,
-			// we've reached the effective base (synthetic anchor / genesis head).
 			if have == ([32]byte{}) {
-				if _, err := getTxRaw(tx, prev); err != nil {
-					log.Printf("SYNCCHAIN stopping at missing prev=%x acct=%x (treat reached)", prev[:4], accountID[:4])
-					reachedHave = true
-					break
+				if accountID == arbID {
+					// For arb chain, only the deterministic arb genesis head counts as the synthetic base.
+					if prev == arbGenesisHead {
+						reachedHave = true
+						log.Printf("SYNCCHAIN arb reached deterministic genesis prev=%x", prev[:4])
+						break
+					}
+
+					// Any other missing prev is a real problem, not a synthetic boundary.
+					if _, err := getTxRaw(tx, prev); err != nil {
+						log.Printf("SYNCCHAIN arb historical gap cur=%x prev=%x target=%x", cur[:4], prev[:4], targetHead[:4])
+						reachedHave = false
+						break
+					}
+				} else {
+					// Normal account-chain heuristic: missing prev means synthetic base.
+					if _, err := getTxRaw(tx, prev); err != nil {
+						log.Printf("SYNCCHAIN acct=%x stopping at synthetic base prev=%x", accountID[:4], prev[:4])
+						reachedHave = true
+						break
+					}
 				}
 			}
 
@@ -1379,6 +1409,19 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 				return nil
 			})
 		}
+
+		// Load arb chain state into snapshot.
+		snap.ArbHead, snap.ArbSeq = getArbChain(tx)
+		if ss, _, err := getSignerSetInTx(tx); err == nil {
+			snap.SignerSet = ss
+		}
+		// Inject arb chain as a synthetic AccountSnap so the generic prev/seq
+		// checks in ValidateTxAgainstSnapshot work without special-casing.
+		snap.Accounts[ArbChainID] = AccountSnap{
+			Head: snap.ArbHead,
+			Seq:  snap.ArbSeq,
+		}
+
 		return nil
 	})
 	return snap, err
@@ -1891,34 +1934,62 @@ func (e *Engine) cleanupAfterEpoch(
 
 func (e *Engine) ensureGenesisOnBoot() error {
 	gen := e.cfg.GenesisAccount
-
 	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
 
+		// --- Regular account genesis (unchanged logic) ---
 		head, bal, seq := getAccount(tx, gen)
-
-		// If already initialized (non-zero head and seq>=1), done.
 		var zero [32]byte
-		if head != zero && seq >= 1 {
-			return nil
+		if head == zero || seq < 1 {
+			if bal == 0 {
+				bal = e.cfg.GenesisSupply
+			}
+			h := sha256.Sum256(append([]byte("ANOS_GENESIS_HEAD_V1:"), gen[:]...))
+			head = h
+			if seq < 1 {
+				seq = 1
+			}
+			if err := putAccount(tx, gen, head, bal, seq); err != nil {
+				return err
+			}
 		}
 
-		// If no balance yet, set to configured supply.
-		if bal == 0 {
-			bal = e.cfg.GenesisSupply
+		// --- Arbitrator genesis (idempotent and repairs partial state) ---
+		if e.cfg.GenesisArbitratorPubkey == zero {
+			return errors.New("GenesisArbitratorPubkey must be set (GENESIS_ARBITRATOR_HEX)")
 		}
 
-		// Create a deterministic “genesis head” (doesn't require a new tx type)
-		// This is just an anchor so first real spend uses prev=head and seq=2.
-		h := sha256.Sum256(append([]byte("ANOS_GENESIS_HEAD_V1:"), gen[:]...))
-
-		head = h
-		if seq < 1 {
-			seq = 1
+		ss, found, err := getSignerSetInTx(tx)
+		if err != nil {
+			return fmt.Errorf("read signer set: %w", err)
 		}
 
-		return putAccount(tx, gen, head, bal, seq)
+		arbHead, arbSeq := getArbChain(tx)
+
+		needSignerSet := !found || ss == nil || len(ss.Pubkeys) == 0
+		needArbChain := arbHead == zero || arbSeq < 1
+
+		if needSignerSet {
+			ss = &pb.SignerSet{
+				Pubkeys:   []*pb.Pub32{{V: append([]byte(nil), e.cfg.GenesisArbitratorPubkey[:]...)}},
+				Threshold: 1,
+			}
+			if err := putSignerSet(tx, ss); err != nil {
+				return err
+			}
+			log.Printf("[genesis] arb signer set bootstrapped key=%x", e.cfg.GenesisArbitratorPubkey[:4])
+		}
+
+		if needArbChain {
+			arbGenesisHead := sha256.Sum256(append([]byte("ANOS_ARB_CHAIN_GENESIS_V1:"), ArbChainID[:]...))
+			if err := putArbChain(tx, arbGenesisHead, 1); err != nil {
+				return err
+			}
+			log.Printf("[genesis] arb chain bootstrapped head=%x seq=1", arbGenesisHead[:4])
+		}
+
+		return nil
 	})
 }

@@ -21,10 +21,14 @@ var (
 	ErrWrongType       = errors.New("wrong tx type")
 )
 
-// Snapshot is the epoch-start view of account states and receivables.
 type Snapshot struct {
 	Accounts    map[[32]byte]AccountSnap
-	Receivables map[[32]byte]struct{} // receivable ids present at epoch start
+	Receivables map[[32]byte]struct{}
+	// ArbHead and ArbSeq are the arb chain tip at epoch start.
+	// Injected into Accounts[ArbChainID] by buildSnapshot so generic prev/seq checks work.
+	ArbHead   [32]byte
+	ArbSeq    uint64
+	SignerSet *pb.SignerSet // nil if not yet bootstrapped
 }
 
 type AccountSnap struct {
@@ -115,6 +119,9 @@ func ValidateTxAgainstSnapshot(tx *pb.Tx, snap *Snapshot) ([32]byte, error) {
 		}
 		return txid, nil
 
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR, pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		return validateArbTxAgainstSnapshot(tx, txid, snap)
+
 	default:
 		return [32]byte{}, ErrWrongType
 	}
@@ -123,16 +130,28 @@ func ValidateTxAgainstSnapshot(tx *pb.Tx, snap *Snapshot) ([32]byte, error) {
 // ApplyTx applies a validated tx to DB state.
 // It assumes prev/seq correctness was checked against snapshot and updates haven't happened mid-commit.
 func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAcct [32]byte) error {
-	if hasTx(view.tx, txid) {
-		return nil
-	}
 	if parsed.Account == nil || len(parsed.Account.V) != 32 {
 		return errors.New("bad account")
 	}
 	var acct [32]byte
 	copy(acct[:], parsed.Account.V)
 
-	head, bal, seq := getAccount(view.tx, acct)
+	var head [32]byte
+	var bal uint64
+	var seq uint64
+
+	if parsed.Type == pb.TxType_TX_TYPE_ADD_ARBITRATOR || parsed.Type == pb.TxType_TX_TYPE_REMOVE_ARBITRATOR {
+		head, seq = getArbChain(view.tx)
+	} else {
+		head, bal, seq = getAccount(view.tx, acct)
+	}
+
+	// If this tx is already the current tip for this chain, treat it as already applied.
+	// Do NOT skip merely because the raw tx bytes already exist in BTxs: during resync
+	// we can have tx bytes present without the corresponding chain state having advanced.
+	if head == txid && seq == parsed.Seq {
+		return nil
+	}
 
 	// prev compare: nil/empty => zeros
 	var prev [32]byte
@@ -140,10 +159,10 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAc
 		copy(prev[:], parsed.Prev.V)
 	}
 	if head != prev {
-		return fmt.Errorf("apply bad prev: have %x want %x", head[:4], prev[:4])
+		return fmt.Errorf("%w: have %x want %x", ErrBadPrev, head[:4], prev[:4])
 	}
 	if parsed.Seq != seq+1 {
-		return fmt.Errorf("apply bad seq: have %d want %d", seq, parsed.Seq-1)
+		return fmt.Errorf("%w: have %d want %d", ErrBadSeq, seq, parsed.Seq-1)
 	}
 
 	switch parsed.Type {
@@ -257,9 +276,133 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAc
 		}
 		return putTxRaw(view.tx, txid, raw)
 
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR, pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		return applyArbTx(view.tx, raw, parsed, txid)
+
 	default:
 		return ErrWrongType
 	}
+}
+
+func validateArbTxAgainstSnapshot(tx *pb.Tx, txid [32]byte, snap *Snapshot) ([32]byte, error) {
+	var acct [32]byte
+	copy(acct[:], tx.Account.V)
+	if acct != ArbChainID {
+		return [32]byte{}, errors.New("arb tx: account must be ArbChainID")
+	}
+	ss := snap.SignerSet
+	if ss == nil || len(ss.Pubkeys) == 0 {
+		return [32]byte{}, errors.New("arb tx: signer set not initialised")
+	}
+	ms := tx.MultiSig
+	if ms == nil {
+		return [32]byte{}, errors.New("arb tx: missing multi_sig")
+	}
+	if err := checkFullQuorum(ms, ss); err != nil {
+		return [32]byte{}, err
+	}
+	switch tx.Type {
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:
+		ab := tx.GetAddArbitrator()
+		if ab == nil || ab.Pubkey == nil || len(ab.Pubkey.V) != 32 {
+			return [32]byte{}, errors.New("arb tx: missing add pubkey")
+		}
+		for _, p := range ss.Pubkeys {
+			if p != nil && bytes.Equal(p.V, ab.Pubkey.V) {
+				return [32]byte{}, errors.New("arb tx: pubkey already in signer set")
+			}
+		}
+	case pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		rb := tx.GetRemoveArbitrator()
+		if rb == nil || rb.Pubkey == nil || len(rb.Pubkey.V) != 32 {
+			return [32]byte{}, errors.New("arb tx: missing remove pubkey")
+		}
+		found := false
+		for _, p := range ss.Pubkeys {
+			if p != nil && bytes.Equal(p.V, rb.Pubkey.V) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return [32]byte{}, errors.New("arb tx: pubkey not in signer set")
+		}
+		if len(ss.Pubkeys) <= 1 {
+			return [32]byte{}, errors.New("arb tx: cannot remove last arbitrator")
+		}
+	}
+	return txid, nil
+}
+
+// checkFullQuorum verifies that every current arbitrator has a corresponding entry
+// in the MultiSig. Crypto validity of each sig was already checked by VerifyTxSignature.
+func checkFullQuorum(ms *pb.MultiSig, ss *pb.SignerSet) error {
+	signers := make(map[string]struct{}, len(ms.Pubkeys))
+	for _, p := range ms.Pubkeys {
+		if p != nil && len(p.V) == 32 {
+			signers[string(p.V)] = struct{}{}
+		}
+	}
+	for _, p := range ss.Pubkeys {
+		if p == nil || len(p.V) != 32 {
+			continue
+		}
+		if _, ok := signers[string(p.V)]; !ok {
+			return fmt.Errorf("arb tx: missing signature from arbitrator %x", p.V[:4])
+		}
+	}
+	return nil
+}
+
+func applyArbTx(tx *bbolt.Tx, raw []byte, parsed *pb.Tx, txid [32]byte) error {
+	ss, _, err := getSignerSetInTx(tx)
+	if err != nil {
+		return fmt.Errorf("applyArbTx: cannot read signer set: %w", err)
+	}
+	newSS, err := deriveNewSignerSet(ss, parsed)
+	if err != nil {
+		return err
+	}
+	if err := putArbChain(tx, txid, parsed.Seq); err != nil {
+		return err
+	}
+	if err := putSignerSet(tx, newSS); err != nil {
+		return err
+	}
+	return putTxRaw(tx, txid, raw)
+}
+
+func deriveNewSignerSet(current *pb.SignerSet, tx *pb.Tx) (*pb.SignerSet, error) {
+	existing := make([]*pb.Pub32, 0, len(current.Pubkeys))
+	for _, p := range current.Pubkeys {
+		if p != nil && len(p.V) == 32 {
+			existing = append(existing, &pb.Pub32{V: append([]byte(nil), p.V...)})
+		}
+	}
+	switch tx.Type {
+	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:
+		ab := tx.GetAddArbitrator()
+		if ab == nil || ab.Pubkey == nil {
+			return nil, errors.New("deriveNewSignerSet: missing pubkey")
+		}
+		existing = append(existing, &pb.Pub32{V: append([]byte(nil), ab.Pubkey.V...)})
+	case pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+		rb := tx.GetRemoveArbitrator()
+		if rb == nil || rb.Pubkey == nil {
+			return nil, errors.New("deriveNewSignerSet: missing pubkey")
+		}
+		filtered := existing[:0]
+		for _, p := range existing {
+			if !bytes.Equal(p.V, rb.Pubkey.V) {
+				filtered = append(filtered, p)
+			}
+		}
+		existing = filtered
+	}
+	return &pb.SignerSet{
+		Pubkeys:   existing,
+		Threshold: uint32(len(existing)), // always full quorum
+	}, nil
 }
 
 type bboltTxView struct{ tx *bbolt.Tx }

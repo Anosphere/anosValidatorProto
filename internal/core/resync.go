@@ -294,39 +294,78 @@ func (e *Engine) fetchAllFrontiers(ctx context.Context, peer string, epoch uint6
 }
 
 // rebuildFromFrontiers incrementally syncs local state to match peer frontiers
+// rebuildFromFrontiers incrementally syncs local state to match peer frontiers.
 func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp uint64, frontiers map[[32]byte][32]byte) error {
 	peer = strings.TrimRight(peer, "/")
 
-	// 1) Clear only accounts whose head diverged from peer
+	arbID := ArbChainID
+
+	// 1) Clear only chains whose head diverged from peer.
+	// Normal accounts live in BAccounts.
+	// Arbitrator chain state lives in BArbChain + BSignerSets.
 	if err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
+
 		accBkt := tx.Bucket(BAccounts)
+		arbBkt := tx.Bucket(BArbChain)
+		ssBkt := tx.Bucket(BSignerSets)
+
 		for acct, peerHead := range frontiers {
+			if acct == arbID {
+				localHead, _ := getArbChain(tx)
+				if localHead != peerHead {
+					if err := arbBkt.Delete(arbID[:]); err != nil {
+						return err
+					}
+					if err := ssBkt.Delete(arbID[:]); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+
 			head, _, _, ok := unpackAccount(accBkt.Get(acct[:]))
 			if !ok || head == peerHead {
 				continue // missing or already matches
 			}
-			// Diverged — wipe this account so it gets fully re-downloaded
-			_ = accBkt.Delete(acct[:])
+
+			// Diverged normal account — wipe so it gets re-downloaded.
+			if err := accBkt.Delete(acct[:]); err != nil {
+				return err
+			}
 		}
+
 		// Clear epoch frontiers/finalizations (will be recomputed after sync)
-		_ = tx.DeleteBucket(BEpochFrontiers)
-		_, _ = tx.CreateBucket(BEpochFrontiers)
-		_ = tx.DeleteBucket(BFinalizations)
-		_, _ = tx.CreateBucket(BFinalizations)
+		if err := tx.DeleteBucket(BEpochFrontiers); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(BEpochFrontiers); err != nil {
+			return err
+		}
+
+		if err := tx.DeleteBucket(BFinalizations); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(BFinalizations); err != nil {
+			return err
+		}
+
 		return nil
 	}); err != nil {
 		return fmt.Errorf("resync: selective wipe: %w", err)
 	}
 
-	// 2) restore genesis anchor
+	// 2) restore genesis anchors
+	// This is important for:
+	// - normal genesis/fund account synthetic head
+	// - arbitrator genesis signer set + arb genesis head
 	if err := e.ensureGenesisOnBoot(); err != nil {
 		return fmt.Errorf("resync: ensure genesis: %w", err)
 	}
 
-	// 3) download chains for each account
+	// 3) download chains for each frontier
 	type chain struct {
 		acct [32]byte
 		raws [][]byte // forward order (oldest -> newest)
@@ -339,39 +378,122 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 		if head == ([32]byte{}) {
 			continue
 		}
-		// Request a large max; if the peer has more than this, caller can increase later.
-		// Determine the correct chain boundary ("have") for this account.
-		// For normal accounts this is zero; for the fund/genesis-anchored account
-		// it's the synthetic genesis head set during ensureGenesisOnBoot().
+
+		// Determine the correct boundary ("have") for this chain.
+		// For normal accounts: current account head (often zero, except genesis/fund anchor).
+		// For arbitrator chain: current arb-chain head from BArbChain.
 		haveBoundary := [32]byte{}
-		_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+		err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
+			if acct == arbID {
+				// Force full arbitrator-chain download during resync.
+				// Using the synthetic local arb genesis head as a boundary can cause
+				// the peer to return only a suffix of the arb chain, which then fails
+				// replay with "bad prev".
+				haveBoundary = [32]byte{}
+				return nil
+			}
 			h, _, _ := getAccount(tx, acct)
-			haveBoundary = h // zero for normal accounts; synthetic anchor for fund/genesis account
+			haveBoundary = h
 			return nil
 		})
+		if err != nil {
+			return err
+		}
 
 		txsBack, reached, err := e.httpSyncChain(ctx, peer, acct, head, haveBoundary, 200000)
+		// Temp DEBUG
+		if acct == arbID {
+			e.elog(targetEp, "RESYNC arb fetch: target=%x have=%x fetched=%d reached=%v",
+				head[:4], haveBoundary[:4], len(txsBack), reached)
+			for i, raw := range txsBack {
+				ptx, err := ParseTx(raw)
+				if err != nil {
+					e.elog(targetEp, "RESYNC arb fetch[%d]: parse err=%v", i, err)
+					continue
+				}
+				txid, _ := crypto.TxID(ptx)
+
+				var prev [32]byte
+				if ptx.Prev != nil && len(ptx.Prev.V) == 32 {
+					copy(prev[:], ptx.Prev.V)
+				}
+				e.elog(targetEp, "RESYNC arb fetch[%d]: tx=%x seq=%d prev=%x",
+					i, txid[:4], ptx.Seq, prev[:4])
+			}
+		}
 		if err != nil {
 			return err
 		}
 		if !reached {
-			return fmt.Errorf("resync: chain for acct %x... did not reach boundary have=%x (increase MaxBlocks)", acct[:4], haveBoundary[:4])
+			return fmt.Errorf(
+				"resync: chain for acct %x... did not reach boundary have=%x (increase MaxBlocks)",
+				acct[:4], haveBoundary[:4],
+			)
 		}
-		// reverse to forward
+
+		// Reverse to forward order
 		for i, j := 0, len(txsBack)-1; i < j; i, j = i+1, j-1 {
 			txsBack[i], txsBack[j] = txsBack[j], txsBack[i]
 		}
-		chains = append(chains, &chain{acct: acct, raws: txsBack})
+
+		// For the arbitrator chain, seed local replay base from the parent of the
+		// oldest fetched arb tx rather than assuming our locally bootstrapped
+		// synthetic genesis head is the correct base.
+		//
+		// This makes resync robust even if the historical arb chain was created
+		// with a different synthetic base head than the one this node would
+		// currently derive locally.
+		if acct == arbID && len(txsBack) > 0 {
+			oldest, err := ParseTx(txsBack[0])
+			if err != nil {
+				return fmt.Errorf("resync: parse oldest arb tx: %w", err)
+			}
+			if oldest.Prev == nil || len(oldest.Prev.V) != 32 {
+				return errors.New("resync: oldest arb tx missing prev")
+			}
+			if oldest.Seq == 0 {
+				return errors.New("resync: oldest arb tx has invalid seq 0")
+			}
+
+			var baseHead [32]byte
+			copy(baseHead[:], oldest.Prev.V)
+			baseSeq := oldest.Seq - 1
+
+			if err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
+				if err := ensureBuckets(tx); err != nil {
+					return err
+				}
+				return putArbChain(tx, baseHead, baseSeq)
+			}); err != nil {
+				return fmt.Errorf("resync: seed arb replay base: %w", err)
+			}
+
+			if acct == arbID && len(txsBack) > 0 {
+				e.elog(targetEp, "RESYNC arb seed: baseHead=%x baseSeq=%d", baseHead[:4], baseSeq)
+
+				var checkHead [32]byte
+				var checkSeq uint64
+				if err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
+					checkHead, checkSeq = getArbChain(tx)
+					return nil
+				}); err == nil {
+					e.elog(targetEp, "RESYNC arb seed verify: head=%x seq=%d", checkHead[:4], checkSeq)
+				}
+			}
+		}
+
+		chains = append(chains, &chain{
+			acct: acct,
+			raws: txsBack,
+		})
 	}
 
 	// Deterministic order for reproducible logs
-	sort.Slice(chains, func(i, j int) bool { return bytes.Compare(chains[i].acct[:], chains[j].acct[:]) < 0 })
+	sort.Slice(chains, func(i, j int) bool {
+		return bytes.Compare(chains[i].acct[:], chains[j].acct[:]) < 0
+	})
 
 	// 4) dependency-aware apply loop
-	// We repeatedly try to apply the next tx from each account chain.
-	// - Prev/seq constraints are enforced by ApplyTx.
-	// - RECEIVE dependencies are enforced by ApplyTx (receivable must exist).
-	// This naturally topologically-sorts SEND->RECEIVE without needing epoch info.
 	remaining := 0
 	for _, c := range chains {
 		remaining += len(c.raws)
@@ -379,10 +501,12 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 
 	for remaining > 0 {
 		progress := 0
+
 		for _, c := range chains {
 			if c.idx >= len(c.raws) {
 				continue
 			}
+
 			raw := c.raws[c.idx]
 			ptx, err := ParseTx(raw)
 			if err != nil {
@@ -398,13 +522,30 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 					return err
 				}
 				view := &bboltTxView{tx: tx}
+				if c.acct == arbID {
+					var curHead [32]byte
+					var curSeq uint64
+					_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
+						curHead, curSeq = getArbChain(tx)
+						return nil
+					})
+
+					var prev [32]byte
+					if ptx.Prev != nil && len(ptx.Prev.V) == 32 {
+						copy(prev[:], ptx.Prev.V)
+					}
+
+					e.elog(targetEp, "RESYNC arb apply: tx=%x seq=%d prev=%x localHead=%x localSeq=%d",
+						txid[:4], ptx.Seq, prev[:4], curHead[:4], curSeq)
+				}
 				return ApplyTx(view, raw, ptx, txid, e.cfg.FundAccount)
 			})
 			if applyErr != nil {
 				// Not-ready errors are expected during dependency resolution.
-				// We only treat truly-fatal errors as abort.
 				switch {
-				case errors.Is(applyErr, ErrUnknownRecv), errors.Is(applyErr, ErrBadPrev), errors.Is(applyErr, ErrBadSeq):
+				case errors.Is(applyErr, ErrUnknownRecv),
+					errors.Is(applyErr, ErrBadPrev),
+					errors.Is(applyErr, ErrBadSeq):
 					continue
 				default:
 					return fmt.Errorf("resync: apply acct=%x... tx=%x...: %v", c.acct[:4], txid[:4], applyErr)
@@ -415,8 +556,8 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 			remaining--
 			progress++
 		}
+
 		if progress == 0 {
-			// Stuck: dump a small hint for debugging.
 			for _, c := range chains {
 				if c.idx >= len(c.raws) {
 					continue
@@ -424,7 +565,10 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 				raw := c.raws[c.idx]
 				ptx, _ := ParseTx(raw)
 				if ptx != nil {
-					return fmt.Errorf("resync: stuck (no progress). next pending acct=%x... seq=%d type=%v prev=%s", c.acct[:4], ptx.Seq, ptx.Type, shortHex32(ptx.Prev))
+					return fmt.Errorf(
+						"resync: stuck (no progress). next pending acct=%x... seq=%d type=%v prev=%s",
+						c.acct[:4], ptx.Seq, ptx.Type, shortHex32(ptx.Prev),
+					)
 				}
 			}
 			return errors.New("resync: stuck (no progress)")
