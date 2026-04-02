@@ -69,6 +69,7 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 	out = append(out, prev32[:]...)
 
 	var u64 [8]byte
+	var u32 [4]byte
 	binary.LittleEndian.PutUint64(u64[:], tx.Seq)
 	out = append(out, u64[:]...)
 
@@ -90,6 +91,9 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 		// receivable_id is derived from txid => encode as 32 zero bytes for signing/txid
 		out = append(out, make([]byte, 32)...)
 
+		binary.LittleEndian.PutUint32(u32[:], uint32(sb.Send.AccountClass))
+		out = append(out, u32[:]...)
+
 		return out, nil
 
 	case pb.TxType_TX_TYPE_RECEIVE:
@@ -99,6 +103,10 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 		}
 		out = append(out, 0x02) // body_tag RECEIVE
 		out = append(out, rb.Receive.ReceivableId.V...)
+
+		binary.LittleEndian.PutUint32(u32[:], uint32(rb.Receive.AccountClass))
+		out = append(out, u32[:]...)
+
 		return out, nil
 
 	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:

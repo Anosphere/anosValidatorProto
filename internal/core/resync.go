@@ -326,7 +326,7 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 				continue
 			}
 
-			head, _, _, ok := unpackAccount(accBkt.Get(acct[:]))
+			head, _, _, _, ok := unpackAccount(accBkt.Get(acct[:]))
 			if !ok || head == peerHead {
 				continue // missing or already matches
 			}
@@ -392,7 +392,7 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 				haveBoundary = [32]byte{}
 				return nil
 			}
-			h, _, _ := getAccount(tx, acct)
+			h, _, _, _ := getAccount(tx, acct)
 			haveBoundary = h
 			return nil
 		})

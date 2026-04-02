@@ -76,6 +76,58 @@ func (TxType) EnumDescriptor() ([]byte, []int) {
 	return file_proto_anos_proto_rawDescGZIP(), []int{0}
 }
 
+type AccountClass int32
+
+const (
+	AccountClass_ACCOUNT_CLASS_UNSPECIFIED AccountClass = 0
+	AccountClass_ACCOUNT_CLASS_HOT         AccountClass = 1
+	AccountClass_ACCOUNT_CLASS_COLD        AccountClass = 2
+	AccountClass_ACCOUNT_CLASS_VAULT       AccountClass = 3
+)
+
+// Enum value maps for AccountClass.
+var (
+	AccountClass_name = map[int32]string{
+		0: "ACCOUNT_CLASS_UNSPECIFIED",
+		1: "ACCOUNT_CLASS_HOT",
+		2: "ACCOUNT_CLASS_COLD",
+		3: "ACCOUNT_CLASS_VAULT",
+	}
+	AccountClass_value = map[string]int32{
+		"ACCOUNT_CLASS_UNSPECIFIED": 0,
+		"ACCOUNT_CLASS_HOT":         1,
+		"ACCOUNT_CLASS_COLD":        2,
+		"ACCOUNT_CLASS_VAULT":       3,
+	}
+)
+
+func (x AccountClass) Enum() *AccountClass {
+	p := new(AccountClass)
+	*p = x
+	return p
+}
+
+func (x AccountClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AccountClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_anos_proto_enumTypes[1].Descriptor()
+}
+
+func (AccountClass) Type() protoreflect.EnumType {
+	return &file_proto_anos_proto_enumTypes[1]
+}
+
+func (x AccountClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AccountClass.Descriptor instead.
+func (AccountClass) EnumDescriptor() ([]byte, []int) {
+	return file_proto_anos_proto_rawDescGZIP(), []int{1}
+}
+
 type Hash32 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	V             []byte                 `protobuf:"bytes,1,opt,name=v,proto3" json:"v,omitempty"`
@@ -259,6 +311,7 @@ type TxBodySend struct {
 	Amount        uint64                 `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"`
 	Fee           uint64                 `protobuf:"varint,3,opt,name=fee,proto3" json:"fee,omitempty"`
 	ReceivableId  *Hash32                `protobuf:"bytes,4,opt,name=receivable_id,json=receivableId,proto3" json:"receivable_id,omitempty"` // deterministically derived from txid
+	AccountClass  AccountClass           `protobuf:"varint,5,opt,name=account_class,json=accountClass,proto3,enum=anos.v2.AccountClass" json:"account_class,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -321,9 +374,17 @@ func (x *TxBodySend) GetReceivableId() *Hash32 {
 	return nil
 }
 
+func (x *TxBodySend) GetAccountClass() AccountClass {
+	if x != nil {
+		return x.AccountClass
+	}
+	return AccountClass_ACCOUNT_CLASS_UNSPECIFIED
+}
+
 type TxBodyReceive struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ReceivableId  *Hash32                `protobuf:"bytes,1,opt,name=receivable_id,json=receivableId,proto3" json:"receivable_id,omitempty"`
+	AccountClass  AccountClass           `protobuf:"varint,2,opt,name=account_class,json=accountClass,proto3,enum=anos.v2.AccountClass" json:"account_class,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -363,6 +424,13 @@ func (x *TxBodyReceive) GetReceivableId() *Hash32 {
 		return x.ReceivableId
 	}
 	return nil
+}
+
+func (x *TxBodyReceive) GetAccountClass() AccountClass {
+	if x != nil {
+		return x.AccountClass
+	}
+	return AccountClass_ACCOUNT_CLASS_UNSPECIFIED
 }
 
 type TxBodyAddArbitrator struct {
@@ -1268,9 +1336,10 @@ type AccountState struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Account *AccountId             `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"`
 	// Current head tx hash (zero/empty means genesis head)
-	Head          *Hash32 `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`
-	Balance       uint64  `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"`
-	Seq           uint64  `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`
+	Head          *Hash32      `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`
+	Balance       uint64       `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"`
+	Seq           uint64       `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`
+	AccountClass  AccountClass `protobuf:"varint,5,opt,name=account_class,json=accountClass,proto3,enum=anos.v2.AccountClass" json:"account_class,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1331,6 +1400,13 @@ func (x *AccountState) GetSeq() uint64 {
 		return x.Seq
 	}
 	return 0
+}
+
+func (x *AccountState) GetAccountClass() AccountClass {
+	if x != nil {
+		return x.AccountClass
+	}
+	return AccountClass_ACCOUNT_CLASS_UNSPECIFIED
 }
 
 type GetAccountRequest struct {
@@ -2413,15 +2489,17 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x05Pub32\x12\f\n" +
 	"\x01v\x18\x01 \x01(\fR\x01v\"\x19\n" +
 	"\tAccountId\x12\f\n" +
-	"\x01v\x18\x01 \x01(\fR\x01v\"\x90\x01\n" +
+	"\x01v\x18\x01 \x01(\fR\x01v\"\xcc\x01\n" +
 	"\n" +
 	"TxBodySend\x12\"\n" +
 	"\x02to\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\x02to\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x04R\x06amount\x12\x10\n" +
 	"\x03fee\x18\x03 \x01(\x04R\x03fee\x124\n" +
-	"\rreceivable_id\x18\x04 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\"E\n" +
+	"\rreceivable_id\x18\x04 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\x12:\n" +
+	"\raccount_class\x18\x05 \x01(\x0e2\x15.anos.v2.AccountClassR\faccountClass\"\x81\x01\n" +
 	"\rTxBodyReceive\x124\n" +
-	"\rreceivable_id\x18\x01 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\"=\n" +
+	"\rreceivable_id\x18\x01 \x01(\v2\x0f.anos.v2.Hash32R\freceivableId\x12:\n" +
+	"\raccount_class\x18\x02 \x01(\x0e2\x15.anos.v2.AccountClassR\faccountClass\"=\n" +
 	"\x13TxBodyAddArbitrator\x12&\n" +
 	"\x06pubkey\x18\x01 \x01(\v2\x0e.anos.v2.Pub32R\x06pubkey\"@\n" +
 	"\x16TxBodyRemoveArbitrator\x12&\n" +
@@ -2487,12 +2565,13 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x10SubmitTxResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12#\n" +
 	"\x04txid\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x04txid\x12'\n" +
-	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error\"\x8d\x01\n" +
+	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error\"\xc9\x01\n" +
 	"\fAccountState\x12,\n" +
 	"\aaccount\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\x12#\n" +
 	"\x04head\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x04head\x12\x18\n" +
 	"\abalance\x18\x03 \x01(\x04R\abalance\x12\x10\n" +
-	"\x03seq\x18\x04 \x01(\x04R\x03seq\"A\n" +
+	"\x03seq\x18\x04 \x01(\x04R\x03seq\x12:\n" +
+	"\raccount_class\x18\x05 \x01(\x0e2\x15.anos.v2.AccountClassR\faccountClass\"A\n" +
 	"\x11GetAccountRequest\x12,\n" +
 	"\aaccount\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\"z\n" +
 	"\x12GetAccountResponse\x12\x0e\n" +
@@ -2567,7 +2646,12 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\fTX_TYPE_SEND\x10\x01\x12\x13\n" +
 	"\x0fTX_TYPE_RECEIVE\x10\x02\x12\x1a\n" +
 	"\x16TX_TYPE_ADD_ARBITRATOR\x10\x03\x12\x1d\n" +
-	"\x19TX_TYPE_REMOVE_ARBITRATOR\x10\x04B\x18Z\x16anos/internal/proto;pbb\x06proto3"
+	"\x19TX_TYPE_REMOVE_ARBITRATOR\x10\x04*u\n" +
+	"\fAccountClass\x12\x1d\n" +
+	"\x19ACCOUNT_CLASS_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11ACCOUNT_CLASS_HOT\x10\x01\x12\x16\n" +
+	"\x12ACCOUNT_CLASS_COLD\x10\x02\x12\x17\n" +
+	"\x13ACCOUNT_CLASS_VAULT\x10\x03B\x18Z\x16anos/internal/proto;pbb\x06proto3"
 
 var (
 	file_proto_anos_proto_rawDescOnce sync.Once
@@ -2581,124 +2665,128 @@ func file_proto_anos_proto_rawDescGZIP() []byte {
 	return file_proto_anos_proto_rawDescData
 }
 
-var file_proto_anos_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proto_anos_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_proto_anos_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_proto_anos_proto_goTypes = []any{
 	(TxType)(0),                      // 0: anos.v2.TxType
-	(*Hash32)(nil),                   // 1: anos.v2.Hash32
-	(*Sig64)(nil),                    // 2: anos.v2.Sig64
-	(*Pub32)(nil),                    // 3: anos.v2.Pub32
-	(*AccountId)(nil),                // 4: anos.v2.AccountId
-	(*TxBodySend)(nil),               // 5: anos.v2.TxBodySend
-	(*TxBodyReceive)(nil),            // 6: anos.v2.TxBodyReceive
-	(*TxBodyAddArbitrator)(nil),      // 7: anos.v2.TxBodyAddArbitrator
-	(*TxBodyRemoveArbitrator)(nil),   // 8: anos.v2.TxBodyRemoveArbitrator
-	(*MultiSig)(nil),                 // 9: anos.v2.MultiSig
-	(*SignerSet)(nil),                // 10: anos.v2.SignerSet
-	(*GetSignerSetResponse)(nil),     // 11: anos.v2.GetSignerSetResponse
-	(*TxSignable)(nil),               // 12: anos.v2.TxSignable
-	(*Tx)(nil),                       // 13: anos.v2.Tx
-	(*Receivable)(nil),               // 14: anos.v2.Receivable
-	(*EpochRecord)(nil),              // 15: anos.v2.EpochRecord
-	(*ApiError)(nil),                 // 16: anos.v2.ApiError
-	(*SubmitTxRequest)(nil),          // 17: anos.v2.SubmitTxRequest
-	(*SubmitTxResponse)(nil),         // 18: anos.v2.SubmitTxResponse
-	(*AccountState)(nil),             // 19: anos.v2.AccountState
-	(*GetAccountRequest)(nil),        // 20: anos.v2.GetAccountRequest
-	(*GetAccountResponse)(nil),       // 21: anos.v2.GetAccountResponse
-	(*ListReceivablesRequest)(nil),   // 22: anos.v2.ListReceivablesRequest
-	(*ListReceivablesResponse)(nil),  // 23: anos.v2.ListReceivablesResponse
-	(*SigDER)(nil),                   // 24: anos.v2.SigDER
-	(*TxInv)(nil),                    // 25: anos.v2.TxInv
-	(*TxWant)(nil),                   // 26: anos.v2.TxWant
-	(*TxPush)(nil),                   // 27: anos.v2.TxPush
-	(*CandidateListV2)(nil),          // 28: anos.v2.CandidateListV2
-	(*EpochFinalization)(nil),        // 29: anos.v2.EpochFinalization
-	(*SyncLatestRequest)(nil),        // 30: anos.v2.SyncLatestRequest
-	(*SyncLatestResponse)(nil),       // 31: anos.v2.SyncLatestResponse
-	(*SyncFinalizationRequest)(nil),  // 32: anos.v2.SyncFinalizationRequest
-	(*SyncFinalizationResponse)(nil), // 33: anos.v2.SyncFinalizationResponse
-	(*FrontierEntry)(nil),            // 34: anos.v2.FrontierEntry
-	(*SyncFrontiersRequest)(nil),     // 35: anos.v2.SyncFrontiersRequest
-	(*SyncFrontiersResponse)(nil),    // 36: anos.v2.SyncFrontiersResponse
-	(*SyncChainRequest)(nil),         // 37: anos.v2.SyncChainRequest
-	(*SyncChainResponse)(nil),        // 38: anos.v2.SyncChainResponse
+	(AccountClass)(0),                // 1: anos.v2.AccountClass
+	(*Hash32)(nil),                   // 2: anos.v2.Hash32
+	(*Sig64)(nil),                    // 3: anos.v2.Sig64
+	(*Pub32)(nil),                    // 4: anos.v2.Pub32
+	(*AccountId)(nil),                // 5: anos.v2.AccountId
+	(*TxBodySend)(nil),               // 6: anos.v2.TxBodySend
+	(*TxBodyReceive)(nil),            // 7: anos.v2.TxBodyReceive
+	(*TxBodyAddArbitrator)(nil),      // 8: anos.v2.TxBodyAddArbitrator
+	(*TxBodyRemoveArbitrator)(nil),   // 9: anos.v2.TxBodyRemoveArbitrator
+	(*MultiSig)(nil),                 // 10: anos.v2.MultiSig
+	(*SignerSet)(nil),                // 11: anos.v2.SignerSet
+	(*GetSignerSetResponse)(nil),     // 12: anos.v2.GetSignerSetResponse
+	(*TxSignable)(nil),               // 13: anos.v2.TxSignable
+	(*Tx)(nil),                       // 14: anos.v2.Tx
+	(*Receivable)(nil),               // 15: anos.v2.Receivable
+	(*EpochRecord)(nil),              // 16: anos.v2.EpochRecord
+	(*ApiError)(nil),                 // 17: anos.v2.ApiError
+	(*SubmitTxRequest)(nil),          // 18: anos.v2.SubmitTxRequest
+	(*SubmitTxResponse)(nil),         // 19: anos.v2.SubmitTxResponse
+	(*AccountState)(nil),             // 20: anos.v2.AccountState
+	(*GetAccountRequest)(nil),        // 21: anos.v2.GetAccountRequest
+	(*GetAccountResponse)(nil),       // 22: anos.v2.GetAccountResponse
+	(*ListReceivablesRequest)(nil),   // 23: anos.v2.ListReceivablesRequest
+	(*ListReceivablesResponse)(nil),  // 24: anos.v2.ListReceivablesResponse
+	(*SigDER)(nil),                   // 25: anos.v2.SigDER
+	(*TxInv)(nil),                    // 26: anos.v2.TxInv
+	(*TxWant)(nil),                   // 27: anos.v2.TxWant
+	(*TxPush)(nil),                   // 28: anos.v2.TxPush
+	(*CandidateListV2)(nil),          // 29: anos.v2.CandidateListV2
+	(*EpochFinalization)(nil),        // 30: anos.v2.EpochFinalization
+	(*SyncLatestRequest)(nil),        // 31: anos.v2.SyncLatestRequest
+	(*SyncLatestResponse)(nil),       // 32: anos.v2.SyncLatestResponse
+	(*SyncFinalizationRequest)(nil),  // 33: anos.v2.SyncFinalizationRequest
+	(*SyncFinalizationResponse)(nil), // 34: anos.v2.SyncFinalizationResponse
+	(*FrontierEntry)(nil),            // 35: anos.v2.FrontierEntry
+	(*SyncFrontiersRequest)(nil),     // 36: anos.v2.SyncFrontiersRequest
+	(*SyncFrontiersResponse)(nil),    // 37: anos.v2.SyncFrontiersResponse
+	(*SyncChainRequest)(nil),         // 38: anos.v2.SyncChainRequest
+	(*SyncChainResponse)(nil),        // 39: anos.v2.SyncChainResponse
 }
 var file_proto_anos_proto_depIdxs = []int32{
-	4,  // 0: anos.v2.TxBodySend.to:type_name -> anos.v2.AccountId
-	1,  // 1: anos.v2.TxBodySend.receivable_id:type_name -> anos.v2.Hash32
-	1,  // 2: anos.v2.TxBodyReceive.receivable_id:type_name -> anos.v2.Hash32
-	3,  // 3: anos.v2.TxBodyAddArbitrator.pubkey:type_name -> anos.v2.Pub32
-	3,  // 4: anos.v2.TxBodyRemoveArbitrator.pubkey:type_name -> anos.v2.Pub32
-	3,  // 5: anos.v2.MultiSig.pubkeys:type_name -> anos.v2.Pub32
-	2,  // 6: anos.v2.MultiSig.sigs:type_name -> anos.v2.Sig64
-	3,  // 7: anos.v2.SignerSet.pubkeys:type_name -> anos.v2.Pub32
-	10, // 8: anos.v2.GetSignerSetResponse.signer_set:type_name -> anos.v2.SignerSet
-	16, // 9: anos.v2.GetSignerSetResponse.error:type_name -> anos.v2.ApiError
-	0,  // 10: anos.v2.TxSignable.type:type_name -> anos.v2.TxType
-	4,  // 11: anos.v2.TxSignable.account:type_name -> anos.v2.AccountId
-	1,  // 12: anos.v2.TxSignable.prev:type_name -> anos.v2.Hash32
-	5,  // 13: anos.v2.TxSignable.send:type_name -> anos.v2.TxBodySend
-	6,  // 14: anos.v2.TxSignable.receive:type_name -> anos.v2.TxBodyReceive
-	7,  // 15: anos.v2.TxSignable.add_arbitrator:type_name -> anos.v2.TxBodyAddArbitrator
-	8,  // 16: anos.v2.TxSignable.remove_arbitrator:type_name -> anos.v2.TxBodyRemoveArbitrator
-	0,  // 17: anos.v2.Tx.type:type_name -> anos.v2.TxType
-	4,  // 18: anos.v2.Tx.account:type_name -> anos.v2.AccountId
-	1,  // 19: anos.v2.Tx.prev:type_name -> anos.v2.Hash32
-	5,  // 20: anos.v2.Tx.send:type_name -> anos.v2.TxBodySend
-	6,  // 21: anos.v2.Tx.receive:type_name -> anos.v2.TxBodyReceive
-	7,  // 22: anos.v2.Tx.add_arbitrator:type_name -> anos.v2.TxBodyAddArbitrator
-	8,  // 23: anos.v2.Tx.remove_arbitrator:type_name -> anos.v2.TxBodyRemoveArbitrator
-	2,  // 24: anos.v2.Tx.sig:type_name -> anos.v2.Sig64
-	9,  // 25: anos.v2.Tx.multi_sig:type_name -> anos.v2.MultiSig
-	1,  // 26: anos.v2.Receivable.id:type_name -> anos.v2.Hash32
-	4,  // 27: anos.v2.Receivable.from:type_name -> anos.v2.AccountId
-	4,  // 28: anos.v2.Receivable.to:type_name -> anos.v2.AccountId
-	1,  // 29: anos.v2.Receivable.created_by_tx:type_name -> anos.v2.Hash32
-	1,  // 30: anos.v2.Receivable.claimed_by_tx:type_name -> anos.v2.Hash32
-	1,  // 31: anos.v2.EpochRecord.accepted_txs:type_name -> anos.v2.Hash32
-	1,  // 32: anos.v2.EpochRecord.state_root:type_name -> anos.v2.Hash32
-	1,  // 33: anos.v2.EpochRecord.prev_epoch_hash:type_name -> anos.v2.Hash32
-	13, // 34: anos.v2.SubmitTxRequest.tx:type_name -> anos.v2.Tx
-	1,  // 35: anos.v2.SubmitTxResponse.txid:type_name -> anos.v2.Hash32
-	16, // 36: anos.v2.SubmitTxResponse.error:type_name -> anos.v2.ApiError
-	4,  // 37: anos.v2.AccountState.account:type_name -> anos.v2.AccountId
-	1,  // 38: anos.v2.AccountState.head:type_name -> anos.v2.Hash32
-	4,  // 39: anos.v2.GetAccountRequest.account:type_name -> anos.v2.AccountId
-	19, // 40: anos.v2.GetAccountResponse.state:type_name -> anos.v2.AccountState
-	16, // 41: anos.v2.GetAccountResponse.error:type_name -> anos.v2.ApiError
-	4,  // 42: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
-	14, // 43: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
-	16, // 44: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
-	3,  // 45: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
-	1,  // 46: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
-	3,  // 47: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
-	1,  // 48: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
-	3,  // 49: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
-	13, // 50: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
-	3,  // 51: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
-	1,  // 52: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
-	1,  // 53: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
-	24, // 54: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
-	1,  // 55: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
-	1,  // 56: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
-	3,  // 57: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
-	24, // 58: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
-	29, // 59: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
-	4,  // 60: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
-	1,  // 61: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
-	4,  // 62: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
-	34, // 63: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
-	4,  // 64: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
-	4,  // 65: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
-	1,  // 66: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
-	1,  // 67: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
-	13, // 68: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
-	69, // [69:69] is the sub-list for method output_type
-	69, // [69:69] is the sub-list for method input_type
-	69, // [69:69] is the sub-list for extension type_name
-	69, // [69:69] is the sub-list for extension extendee
-	0,  // [0:69] is the sub-list for field type_name
+	5,  // 0: anos.v2.TxBodySend.to:type_name -> anos.v2.AccountId
+	2,  // 1: anos.v2.TxBodySend.receivable_id:type_name -> anos.v2.Hash32
+	1,  // 2: anos.v2.TxBodySend.account_class:type_name -> anos.v2.AccountClass
+	2,  // 3: anos.v2.TxBodyReceive.receivable_id:type_name -> anos.v2.Hash32
+	1,  // 4: anos.v2.TxBodyReceive.account_class:type_name -> anos.v2.AccountClass
+	4,  // 5: anos.v2.TxBodyAddArbitrator.pubkey:type_name -> anos.v2.Pub32
+	4,  // 6: anos.v2.TxBodyRemoveArbitrator.pubkey:type_name -> anos.v2.Pub32
+	4,  // 7: anos.v2.MultiSig.pubkeys:type_name -> anos.v2.Pub32
+	3,  // 8: anos.v2.MultiSig.sigs:type_name -> anos.v2.Sig64
+	4,  // 9: anos.v2.SignerSet.pubkeys:type_name -> anos.v2.Pub32
+	11, // 10: anos.v2.GetSignerSetResponse.signer_set:type_name -> anos.v2.SignerSet
+	17, // 11: anos.v2.GetSignerSetResponse.error:type_name -> anos.v2.ApiError
+	0,  // 12: anos.v2.TxSignable.type:type_name -> anos.v2.TxType
+	5,  // 13: anos.v2.TxSignable.account:type_name -> anos.v2.AccountId
+	2,  // 14: anos.v2.TxSignable.prev:type_name -> anos.v2.Hash32
+	6,  // 15: anos.v2.TxSignable.send:type_name -> anos.v2.TxBodySend
+	7,  // 16: anos.v2.TxSignable.receive:type_name -> anos.v2.TxBodyReceive
+	8,  // 17: anos.v2.TxSignable.add_arbitrator:type_name -> anos.v2.TxBodyAddArbitrator
+	9,  // 18: anos.v2.TxSignable.remove_arbitrator:type_name -> anos.v2.TxBodyRemoveArbitrator
+	0,  // 19: anos.v2.Tx.type:type_name -> anos.v2.TxType
+	5,  // 20: anos.v2.Tx.account:type_name -> anos.v2.AccountId
+	2,  // 21: anos.v2.Tx.prev:type_name -> anos.v2.Hash32
+	6,  // 22: anos.v2.Tx.send:type_name -> anos.v2.TxBodySend
+	7,  // 23: anos.v2.Tx.receive:type_name -> anos.v2.TxBodyReceive
+	8,  // 24: anos.v2.Tx.add_arbitrator:type_name -> anos.v2.TxBodyAddArbitrator
+	9,  // 25: anos.v2.Tx.remove_arbitrator:type_name -> anos.v2.TxBodyRemoveArbitrator
+	3,  // 26: anos.v2.Tx.sig:type_name -> anos.v2.Sig64
+	10, // 27: anos.v2.Tx.multi_sig:type_name -> anos.v2.MultiSig
+	2,  // 28: anos.v2.Receivable.id:type_name -> anos.v2.Hash32
+	5,  // 29: anos.v2.Receivable.from:type_name -> anos.v2.AccountId
+	5,  // 30: anos.v2.Receivable.to:type_name -> anos.v2.AccountId
+	2,  // 31: anos.v2.Receivable.created_by_tx:type_name -> anos.v2.Hash32
+	2,  // 32: anos.v2.Receivable.claimed_by_tx:type_name -> anos.v2.Hash32
+	2,  // 33: anos.v2.EpochRecord.accepted_txs:type_name -> anos.v2.Hash32
+	2,  // 34: anos.v2.EpochRecord.state_root:type_name -> anos.v2.Hash32
+	2,  // 35: anos.v2.EpochRecord.prev_epoch_hash:type_name -> anos.v2.Hash32
+	14, // 36: anos.v2.SubmitTxRequest.tx:type_name -> anos.v2.Tx
+	2,  // 37: anos.v2.SubmitTxResponse.txid:type_name -> anos.v2.Hash32
+	17, // 38: anos.v2.SubmitTxResponse.error:type_name -> anos.v2.ApiError
+	5,  // 39: anos.v2.AccountState.account:type_name -> anos.v2.AccountId
+	2,  // 40: anos.v2.AccountState.head:type_name -> anos.v2.Hash32
+	1,  // 41: anos.v2.AccountState.account_class:type_name -> anos.v2.AccountClass
+	5,  // 42: anos.v2.GetAccountRequest.account:type_name -> anos.v2.AccountId
+	20, // 43: anos.v2.GetAccountResponse.state:type_name -> anos.v2.AccountState
+	17, // 44: anos.v2.GetAccountResponse.error:type_name -> anos.v2.ApiError
+	5,  // 45: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
+	15, // 46: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
+	17, // 47: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
+	4,  // 48: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
+	2,  // 49: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
+	4,  // 50: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
+	2,  // 51: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
+	4,  // 52: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
+	14, // 53: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
+	4,  // 54: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
+	2,  // 55: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
+	2,  // 56: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
+	25, // 57: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
+	2,  // 58: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
+	2,  // 59: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
+	4,  // 60: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
+	25, // 61: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
+	30, // 62: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
+	5,  // 63: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
+	2,  // 64: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
+	5,  // 65: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
+	35, // 66: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
+	5,  // 67: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
+	5,  // 68: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
+	2,  // 69: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
+	2,  // 70: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
+	14, // 71: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
+	72, // [72:72] is the sub-list for method output_type
+	72, // [72:72] is the sub-list for method input_type
+	72, // [72:72] is the sub-list for extension type_name
+	72, // [72:72] is the sub-list for extension extendee
+	0,  // [0:72] is the sub-list for field type_name
 }
 
 func init() { file_proto_anos_proto_init() }
@@ -2723,7 +2811,7 @@ func file_proto_anos_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_anos_proto_rawDesc), len(file_proto_anos_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   0,

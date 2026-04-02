@@ -37,42 +37,44 @@ func ensureBuckets(tx *bbolt.Tx) error {
 	return nil
 }
 
-func packAccount(head [32]byte, balance uint64, seq uint64) []byte {
-	out := make([]byte, 32+8+8)
+func packAccount(head [32]byte, balance uint64, seq uint64, class pb.AccountClass) []byte {
+	out := make([]byte, 32+8+8+4)
 	copy(out[:32], head[:])
 	binary.BigEndian.PutUint64(out[32:40], balance)
 	binary.BigEndian.PutUint64(out[40:48], seq)
+	binary.BigEndian.PutUint32(out[48:52], uint32(class))
 	return out
 }
 
-func unpackAccount(v []byte) (head [32]byte, bal uint64, seq uint64, ok bool) {
-	if len(v) != 32+8+8 {
-		return [32]byte{}, 0, 0, false
+func unpackAccount(v []byte) (head [32]byte, bal uint64, seq uint64, class pb.AccountClass, ok bool) {
+	if len(v) != 32+8+8+4 {
+		return [32]byte{}, 0, 0, 0, false
 	}
 	copy(head[:], v[:32])
 	bal = binary.BigEndian.Uint64(v[32:40])
 	seq = binary.BigEndian.Uint64(v[40:48])
-	return head, bal, seq, true
+	class = pb.AccountClass(binary.BigEndian.Uint32(v[48:52]))
+	return head, bal, seq, class, true
 }
 
-func getAccount(tx *bbolt.Tx, acct [32]byte) (head [32]byte, bal uint64, seq uint64) {
+func getAccount(tx *bbolt.Tx, acct [32]byte) (head [32]byte, bal uint64, seq uint64, class pb.AccountClass) {
 	b := tx.Bucket(BAccounts)
 	if b == nil {
-		return [32]byte{}, 0, 0
+		return [32]byte{}, 0, 0, 0
 	}
 	v := b.Get(acct[:])
 	if v == nil {
-		return [32]byte{}, 0, 0
+		return [32]byte{}, 0, 0, 0
 	}
-	h, bbal, sseq, ok := unpackAccount(v)
+	h, bbal, sseq, cl, ok := unpackAccount(v)
 	if !ok {
-		return [32]byte{}, 0, 0
+		return [32]byte{}, 0, 0, 0
 	}
-	return h, bbal, sseq
+	return h, bbal, sseq, cl
 }
 
-func putAccount(tx *bbolt.Tx, acct [32]byte, head [32]byte, bal uint64, seq uint64) error {
-	return tx.Bucket(BAccounts).Put(acct[:], packAccount(head, bal, seq))
+func putAccount(tx *bbolt.Tx, acct [32]byte, head [32]byte, bal uint64, seq uint64, class pb.AccountClass) error {
+	return tx.Bucket(BAccounts).Put(acct[:], packAccount(head, bal, seq, class))
 }
 
 func putTxRaw(tx *bbolt.Tx, txid [32]byte, raw []byte) error {
@@ -114,6 +116,7 @@ type AccountHeadRow struct {
 	Head    [32]byte
 	Balance uint64
 	Seq     uint64
+	Class   pb.AccountClass
 }
 
 // ListAllAccountHeads reads the current heads for all accounts from the DB.
@@ -133,7 +136,7 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 			if len(k) != 32 {
 				continue
 			}
-			head, bal, seq, ok := unpackAccount(v)
+			head, bal, seq, class, ok := unpackAccount(v)
 			if !ok {
 				continue
 			}
@@ -146,6 +149,7 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 				Head:    head,
 				Balance: bal,
 				Seq:     seq,
+				Class:   class,
 			})
 		}
 		return nil
@@ -227,7 +231,7 @@ func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
 			if len(k) != 32 {
 				continue
 			}
-			head, _, _, ok := unpackAccount(v)
+			head, _, _, _, ok := unpackAccount(v)
 			if !ok {
 				continue
 			}
@@ -365,7 +369,7 @@ func ComputeDryRunFrontiersRoot(db *bbolt.DB, winners map[[32]byte][32]byte) ([3
 				if len(k) != 32 {
 					continue
 				}
-				head, _, _, ok := unpackAccount(v)
+				head, _, _, _, ok := unpackAccount(v)
 				if !ok {
 					continue
 				}

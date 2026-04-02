@@ -145,33 +145,6 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// POST /faucet?acct=<hex32>&amount=<u64> (dev/admin)
-	mux.HandleFunc("/faucet", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		acctHex := r.URL.Query().Get("acct")
-		amountStr := r.URL.Query().Get("amount")
-		acctBytes, err := hex.DecodeString(strings.TrimSpace(acctHex))
-		if err != nil || len(acctBytes) != 32 {
-			http.Error(w, "need ?acct=<hex32>", 400)
-			return
-		}
-		amt, err := strconv.ParseUint(strings.TrimSpace(amountStr), 10, 64)
-		if err != nil {
-			http.Error(w, "need ?amount=<u64>", 400)
-			return
-		}
-		var acct [32]byte
-		copy(acct[:], acctBytes)
-		if err := engine.Faucet(acct, amt); err != nil {
-			http.Error(w, "error", 500)
-			return
-		}
-		w.WriteHeader(200)
-	})
-
 	// ---- Peer endpoints (protobuf-delimited streams) ----
 
 	// GET /peer/id -> Pub32
@@ -573,7 +546,7 @@ func main() {
 		var acct [32]byte
 		copy(acct[:], req.Account.V)
 
-		head, bal, seq, err := engine.AccountState(acct)
+		head, bal, seq, class, err := engine.AccountState(acct)
 		resp := &pb.GetAccountResponse{Ok: false}
 		if err != nil {
 			resp.Error = &pb.ApiError{Code: 500, Message: "error", Detail: err.Error()}
@@ -582,10 +555,11 @@ func main() {
 		}
 
 		resp.State = &pb.AccountState{
-			Account: &pb.AccountId{V: req.Account.V},
-			Head:    &pb.Hash32{V: head[:]},
-			Balance: bal,
-			Seq:     seq,
+			Account:      &pb.AccountId{V: req.Account.V},
+			Head:         &pb.Hash32{V: head[:]},
+			Balance:      bal,
+			Seq:          seq,
+			AccountClass: class,
 		}
 		resp.Ok = true
 		_ = writeProtoRaw(w, resp)
@@ -725,6 +699,7 @@ func main() {
 			Head    string `json:"head"`
 			Balance uint64 `json:"balance"`
 			Seq     uint64 `json:"seq"`
+			Class   string `json:"class"`
 		}
 
 		out := make([]rowJSON, 0, len(rows))
@@ -734,6 +709,7 @@ func main() {
 				Head:    hex.EncodeToString(rr.Head[:]),
 				Balance: rr.Balance,
 				Seq:     rr.Seq,
+				Class:   rr.Class.String(),
 			})
 		}
 

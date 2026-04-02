@@ -237,22 +237,10 @@ func (e *Engine) SubmitTx(raw []byte) error {
 	return nil
 }
 
-// Faucet credits an account directly (admin/testing).
-func (e *Engine) Faucet(acct [32]byte, amount uint64) error {
-	return e.cfg.DB.Update(func(tx *bbolt.Tx) error {
-		if err := ensureBuckets(tx); err != nil {
-			return err
-		}
-		head, bal, seq := getAccount(tx, acct)
-		bal += amount
-		return putAccount(tx, acct, head, bal, seq)
-	})
-}
-
-func (e *Engine) AccountState(acct [32]byte) (head [32]byte, bal uint64, seq uint64, err error) {
+func (e *Engine) AccountState(acct [32]byte) (head [32]byte, bal uint64, seq uint64, class pb.AccountClass, err error) {
 	err = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-		h, b, s := getAccount(tx, acct)
-		head, bal, seq = h, b, s
+		h, b, s, cl := getAccount(tx, acct)
+		head, bal, seq, class = h, b, s, cl
 		return nil
 	})
 	return
@@ -1384,9 +1372,9 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 				if len(k) == 32 {
 					var acct [32]byte
 					copy(acct[:], k)
-					h, bal, seq, ok := unpackAccount(v)
+					h, bal, seq, class, ok := unpackAccount(v)
 					if ok {
-						snap.Accounts[acct] = AccountSnap{Head: h, Balance: bal, Seq: seq}
+						snap.Accounts[acct] = AccountSnap{Head: h, Balance: bal, Seq: seq, Class: class}
 					}
 				}
 				return nil
@@ -1420,6 +1408,7 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 		snap.Accounts[ArbChainID] = AccountSnap{
 			Head: snap.ArbHead,
 			Seq:  snap.ArbSeq,
+			// Class intentionally left as UNSPECIFIED for arb chain
 		}
 
 		return nil
@@ -1940,7 +1929,7 @@ func (e *Engine) ensureGenesisOnBoot() error {
 		}
 
 		// --- Regular account genesis (unchanged logic) ---
-		head, bal, seq := getAccount(tx, gen)
+		head, bal, seq, _ := getAccount(tx, gen)
 		var zero [32]byte
 		if head == zero || seq < 1 {
 			if bal == 0 {
@@ -1951,7 +1940,7 @@ func (e *Engine) ensureGenesisOnBoot() error {
 			if seq < 1 {
 				seq = 1
 			}
-			if err := putAccount(tx, gen, head, bal, seq); err != nil {
+			if err := putAccount(tx, gen, head, bal, seq, pb.AccountClass_ACCOUNT_CLASS_HOT); err != nil {
 				return err
 			}
 		}

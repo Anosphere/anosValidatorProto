@@ -164,9 +164,10 @@ func main() {
 				Prev:    &pb.Hash32{V: st.Head.GetV()},
 				Seq:     st.Seq + 1,
 				Body: &pb.Tx_Send{Send: &pb.TxBodySend{
-					To:     &pb.AccountId{V: toPub},
-					Amount: amount,
-					Fee:    fee,
+					To:           &pb.AccountId{V: toPub},
+					Amount:       amount,
+					Fee:          fee,
+					AccountClass: pb.AccountClass_ACCOUNT_CLASS_HOT,
 				}},
 			}
 

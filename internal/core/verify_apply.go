@@ -35,6 +35,7 @@ type AccountSnap struct {
 	Head    [32]byte
 	Balance uint64
 	Seq     uint64
+	Class   pb.AccountClass
 }
 
 func ParseTx(raw []byte) (*pb.Tx, error) {
@@ -77,6 +78,30 @@ func ValidateTxAgainstSnapshot(tx *pb.Tx, snap *Snapshot) ([32]byte, error) {
 	}
 	if tx.Seq != as.Seq+1 {
 		return [32]byte{}, ErrBadSeq
+	}
+
+	// Class validation for normal account-chain transactions.
+	// Arb-chain transactions (ADD/REMOVE_ARBITRATOR) are excluded.
+	if tx.Type == pb.TxType_TX_TYPE_SEND || tx.Type == pb.TxType_TX_TYPE_RECEIVE {
+		var txClass pb.AccountClass
+		switch tx.Type {
+		case pb.TxType_TX_TYPE_SEND:
+			sb, _ := tx.Body.(*pb.Tx_Send)
+			if sb != nil && sb.Send != nil {
+				txClass = sb.Send.AccountClass
+			}
+		case pb.TxType_TX_TYPE_RECEIVE:
+			rb, _ := tx.Body.(*pb.Tx_Receive)
+			if rb != nil && rb.Receive != nil {
+				txClass = rb.Receive.AccountClass
+			}
+		}
+		if txClass == pb.AccountClass_ACCOUNT_CLASS_UNSPECIFIED {
+			return [32]byte{}, errors.New("account_class is required for normal account transactions")
+		}
+		if ok && as.Class != pb.AccountClass_ACCOUNT_CLASS_UNSPECIFIED && as.Class != txClass {
+			return [32]byte{}, errors.New("account_class mismatch: cannot change class of existing account")
+		}
 	}
 
 	switch tx.Type {
@@ -139,11 +164,12 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAc
 	var head [32]byte
 	var bal uint64
 	var seq uint64
+	var existingClass pb.AccountClass
 
 	if parsed.Type == pb.TxType_TX_TYPE_ADD_ARBITRATOR || parsed.Type == pb.TxType_TX_TYPE_REMOVE_ARBITRATOR {
 		head, seq = getArbChain(view.tx)
 	} else {
-		head, bal, seq = getAccount(view.tx, acct)
+		head, bal, seq, existingClass = getAccount(view.tx, acct)
 	}
 
 	// If this tx is already the current tip for this chain, treat it as already applied.
@@ -231,7 +257,7 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAc
 
 		seq = parsed.Seq
 		head = txid
-		if err := putAccount(view.tx, acct, head, bal, seq); err != nil {
+		if err := putAccount(view.tx, acct, head, bal, seq, existingClass); err != nil {
 			return err
 		}
 		return putTxRaw(view.tx, txid, raw)
@@ -269,9 +295,17 @@ func ApplyTx(view *bboltTxView, raw []byte, parsed *pb.Tx, txid [32]byte, fundAc
 			return err
 		}
 
+		// Determine class to persist.
+		// If the account already has a class, keep it (validation already confirmed tx class matches).
+		// If this is a new account (existingClass is UNSPECIFIED), establish class from this tx.
+		classToStore := existingClass
+		if classToStore == pb.AccountClass_ACCOUNT_CLASS_UNSPECIFIED {
+			classToStore = rb.AccountClass
+		}
+
 		seq = parsed.Seq
 		head = txid
-		if err := putAccount(view.tx, acct, head, bal, seq); err != nil {
+		if err := putAccount(view.tx, acct, head, bal, seq, classToStore); err != nil {
 			return err
 		}
 		return putTxRaw(view.tx, txid, raw)

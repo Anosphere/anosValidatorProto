@@ -25,15 +25,24 @@ enum TxType {
   TX_TYPE_REMOVE_ARBITRATOR  = 4;
 }
 
+enum AccountClass {
+  ACCOUNT_CLASS_UNSPECIFIED = 0;
+  ACCOUNT_CLASS_HOT         = 1;
+  ACCOUNT_CLASS_COLD        = 2;
+  ACCOUNT_CLASS_VAULT       = 3;
+}
+
 message TxBodySend {
   AccountId to = 1;
   uint64 amount = 2;
   uint64 fee = 3;
   Hash32 receivable_id = 4; // deterministically derived from txid
+  AccountClass account_class = 5;
 }
 
 message TxBodyReceive {
   Hash32 receivable_id = 1;
+  AccountClass account_class = 2;
 }
 
 message TxBodyAddArbitrator {
@@ -149,6 +158,8 @@ message AccountState {
 
   uint64 balance = 3;
   uint64 seq = 4;
+
+  AccountClass account_class = 5;
 }
 
 message GetAccountRequest {
