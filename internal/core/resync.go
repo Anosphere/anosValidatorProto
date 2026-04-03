@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -312,29 +313,19 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 		arbBkt := tx.Bucket(BArbChain)
 		ssBkt := tx.Bucket(BSignerSets)
 
-		for acct, peerHead := range frontiers {
-			if acct == arbID {
-				localHead, _ := getArbChain(tx)
-				if localHead != peerHead {
-					if err := arbBkt.Delete(arbID[:]); err != nil {
-						return err
-					}
-					if err := ssBkt.Delete(arbID[:]); err != nil {
-						return err
-					}
-				}
-				continue
-			}
+		// Wipe all account state — will be rebuilt from full chain replay below.
+		if err := accBkt.ForEach(func(k, _ []byte) error {
+			return accBkt.Delete(k)
+		}); err != nil {
+			return err
+		}
 
-			head, _, _, _, ok := unpackAccount(accBkt.Get(acct[:]))
-			if !ok || head == peerHead {
-				continue // missing or already matches
-			}
-
-			// Diverged normal account — wipe so it gets re-downloaded.
-			if err := accBkt.Delete(acct[:]); err != nil {
-				return err
-			}
+		// Wipe arb chain state unconditionally.
+		if err := arbBkt.Delete(arbID[:]); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if err := ssBkt.Delete(arbID[:]); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
 		}
 
 		// Clear epoch frontiers/finalizations (will be recomputed after sync)
@@ -349,6 +340,23 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 			return err
 		}
 		if _, err := tx.CreateBucketIfNotExists(BFinalizations); err != nil {
+			return err
+		}
+
+		// Clear receivables and tx store — they are fully rebuilt from chain replay below.
+		// Stale claimed-state in BRecv would cause RECEIVE txs to be rejected as "already claimed".
+		// Stale entries in BTxs are harmless but clearing them keeps state clean.
+		if err := tx.DeleteBucket(BRecv); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(BRecv); err != nil {
+			return err
+		}
+
+		if err := tx.DeleteBucket(BTxs); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(BTxs); err != nil {
 			return err
 		}
 
@@ -372,10 +380,20 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 		idx  int
 	}
 
+	arbGenesisHead := sha256.Sum256(append([]byte("ANOS_ARB_CHAIN_GENESIS_V1:"), arbID[:]...))
+
 	chains := make([]*chain, 0, len(frontiers))
 	for acct, head := range frontiers {
 		// Skip zero head
 		if head == ([32]byte{}) {
+			continue
+		}
+
+		// Skip the arb chain if its frontier is still the synthetic genesis head.
+		// That head is not a real tx in BTxs, so SyncChain cannot walk it.
+		// If no real arb txs have been applied, ensureGenesisOnBoot already
+		// bootstrapped the correct arb chain state — nothing to replay.
+		if acct == arbID && head == arbGenesisHead {
 			continue
 		}
 
