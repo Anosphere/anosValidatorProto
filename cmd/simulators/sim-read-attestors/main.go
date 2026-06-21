@@ -18,7 +18,7 @@ func main() {
 	}
 	baseURL := validatorUrlList[2]
 
-	resp, err := http.Get(baseURL + "/arbitrator/signer-set")
+	resp, err := http.Get(baseURL + "/attestor/signer-set")
 	if err != nil {
 		panic(err)
 	}

@@ -46,9 +46,14 @@ type EngineConfig struct {
 	GenesisAccount [32]byte
 	GenesisSupply  uint64
 
-	// GenesisArbitratorPubkey is the ed25519 pubkey (32 bytes) of the initial arbitrator.
-	// Set via GENESIS_ARBITRATOR_HEX. Must be identical on all validators.
-	GenesisArbitratorPubkey [32]byte
+	// GenesisAttestorPubkey is the ed25519 pubkey (32 bytes) of the initial attestor.
+	// Set via GENESIS_ATTESTOR_HEX. Must be identical on all validators.
+	GenesisAttestorPubkey [32]byte
+
+	// TimelockedDelayEpochs is the minimum timelock (in epochs) applied when funds move out
+	// of a TIMELOCKED account through a transfer chain. CONSENSUS-CRITICAL: must be identical
+	// on all validators (set via TIMELOCKED_DELAY_EPOCHS, exactly like EPOCH_MS/GENESIS_UNIX_MS).
+	TimelockedDelayEpochs uint64
 }
 
 type Engine struct {
@@ -268,15 +273,15 @@ func (e *Engine) ListReceivables(toAcct [32]byte) ([]*pb.Receivable, error) {
 	return out, err
 }
 
-// GetSignerSetState returns the current arbitrator SignerSet.
+// GetSignerSetState returns the current attestor SignerSet.
 func (e *Engine) GetSignerSetState() (*pb.SignerSet, error) {
 	return GetSignerSet(e.cfg.DB)
 }
 
-// ArbChainState returns the current arbitrator chain head hash and seq number.
-func (e *Engine) ArbChainState() (head [32]byte, seq uint64, err error) {
+// AttestorChainState returns the current attestor chain head hash and seq number.
+func (e *Engine) AttestorChainState() (head [32]byte, seq uint64, err error) {
 	err = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-		head, seq = getArbChain(tx)
+		head, seq = getAttestorChain(tx)
 		return nil
 	})
 	return head, seq, err
@@ -572,8 +577,8 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 
 	var out [][]byte
 	reachedHave := false
-	arbID := ArbChainID
-	arbGenesisHead := sha256.Sum256(append([]byte("ANOS_ARB_CHAIN_GENESIS_V1:"), ArbChainID[:]...))
+	attestorID := AttestorChainID
+	attestorGenesisHead := sha256.Sum256(append([]byte("ANOS_ATTESTOR_CHAIN_GENESIS_V1:"), AttestorChainID[:]...))
 
 	if err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
 		if tx.Bucket(BTxs) == nil {
@@ -626,17 +631,17 @@ func (e *Engine) SyncChain(accountID [32]byte, targetHead [32]byte, have [32]byt
 			}
 
 			if have == ([32]byte{}) {
-				if accountID == arbID {
-					// For arb chain, only the deterministic arb genesis head counts as the synthetic base.
-					if prev == arbGenesisHead {
+				if accountID == attestorID {
+					// For attestor chain, only the deterministic attestor genesis head counts as the synthetic base.
+					if prev == attestorGenesisHead {
 						reachedHave = true
-						log.Printf("SYNCCHAIN arb reached deterministic genesis prev=%x", prev[:4])
+						log.Printf("SYNCCHAIN attestor reached deterministic genesis prev=%x", prev[:4])
 						break
 					}
 
 					// Any other missing prev is a real problem, not a synthetic boundary.
 					if _, err := getTxRaw(tx, prev); err != nil {
-						log.Printf("SYNCCHAIN arb historical gap cur=%x prev=%x target=%x", cur[:4], prev[:4], targetHead[:4])
+						log.Printf("SYNCCHAIN attestor historical gap cur=%x prev=%x target=%x", cur[:4], prev[:4], targetHead[:4])
 						reachedHave = false
 						break
 					}
@@ -726,7 +731,7 @@ func (e *Engine) loop(ctx context.Context) {
 		e.elog(epoch, " ----- Starting New Epoch ----- ")
 
 		// Snapshot at the *start* of the epoch window (best-effort).
-		epochSnap, _ := e.buildSnapshot()
+		epochSnap, _ := e.buildSnapshot(epoch)
 
 		// Sleep until the epoch boundary (end of this epoch).
 		sleepMs := epochEndMs - nowMs
@@ -1033,7 +1038,7 @@ func (e *Engine) loop(ctx context.Context) {
 				}
 
 				// Cleanup: delete losers + delete accepted-but-failed-apply
-				postSnap, _ := e.buildSnapshot()
+				postSnap, _ := e.buildSnapshot(epoch)
 				log.Printf("[epoch=%d] phase:cleanup-start txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
 				e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
 				log.Printf("[epoch=%d] phase:cleanup-done txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
@@ -1103,7 +1108,7 @@ func (e *Engine) loop(ctx context.Context) {
 							}
 
 							// Cleanup: same as normal path
-							postSnap, _ := e.buildSnapshot()
+							postSnap, _ := e.buildSnapshot(epoch)
 							log.Printf("[epoch=%d] phase:cleanup-start txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
 							e.cleanupAfterEpoch(epoch, acceptedSet, failedApplied, postSnap)
 							log.Printf("[epoch=%d] phase:cleanup-done txPool=%d wallMs=%d", epoch, len(e.txPool), time.Now().UnixMilli())
@@ -1360,10 +1365,12 @@ func (e *Engine) recordGossipAck(bit uint64, need int, acked [][32]byte) {
 	}
 }
 
-func (e *Engine) buildSnapshot() (*Snapshot, error) {
+func (e *Engine) buildSnapshot(epoch uint64) (*Snapshot, error) {
 	snap := &Snapshot{
 		Accounts:    make(map[[32]byte]AccountSnap),
-		Receivables: make(map[[32]byte]struct{}),
+		Receivables: make(map[[32]byte]ReceivableSnap),
+		Epoch:       epoch,
+		DelayEpochs: e.cfg.TimelockedDelayEpochs,
 	}
 	err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
 		ab := tx.Bucket(BAccounts)
@@ -1372,9 +1379,16 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 				if len(k) == 32 {
 					var acct [32]byte
 					copy(acct[:], k)
-					h, bal, seq, class, ok := unpackAccount(v)
-					if ok {
-						snap.Accounts[acct] = AccountSnap{Head: h, Balance: bal, Seq: seq, Class: class}
+					if r, ok := unpackAccountRecord(v); ok {
+						snap.Accounts[acct] = AccountSnap{
+							Head:           r.Head,
+							Balance:        r.Balance,
+							Seq:            r.Seq,
+							Class:          r.Class,
+							TransferSource: r.TransferSource,
+							TransferDest:   r.TransferDest,
+							TransferUnlock: r.TransferUnlock,
+						}
 					}
 				}
 				return nil
@@ -1386,11 +1400,20 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 				if len(k) == 32 {
 					var rid [32]byte
 					copy(rid[:], k)
-					// only include unclaimed receivables in snapshot set
+					// only include unclaimed receivables in the snapshot
 					var rec pb.Receivable
 					if err := proto.Unmarshal(v, &rec); err == nil {
 						if !rec.Claimed {
-							snap.Receivables[rid] = struct{}{}
+							var rs ReceivableSnap
+							if rec.From != nil && len(rec.From.V) == 32 {
+								copy(rs.From[:], rec.From.V)
+							}
+							if rec.To != nil && len(rec.To.V) == 32 {
+								copy(rs.To[:], rec.To.V)
+							}
+							rs.Amount = rec.Amount
+							rs.RequiredDestClass = rec.RequiredDestClass
+							snap.Receivables[rid] = rs
 						}
 					}
 				}
@@ -1398,17 +1421,17 @@ func (e *Engine) buildSnapshot() (*Snapshot, error) {
 			})
 		}
 
-		// Load arb chain state into snapshot.
-		snap.ArbHead, snap.ArbSeq = getArbChain(tx)
+		// Load attestor chain state into snapshot.
+		snap.AttestorHead, snap.AttestorSeq = getAttestorChain(tx)
 		if ss, _, err := getSignerSetInTx(tx); err == nil {
 			snap.SignerSet = ss
 		}
-		// Inject arb chain as a synthetic AccountSnap so the generic prev/seq
+		// Inject attestor chain as a synthetic AccountSnap so the generic prev/seq
 		// checks in ValidateTxAgainstSnapshot work without special-casing.
-		snap.Accounts[ArbChainID] = AccountSnap{
-			Head: snap.ArbHead,
-			Seq:  snap.ArbSeq,
-			// Class intentionally left as UNSPECIFIED for arb chain
+		snap.Accounts[AttestorChainID] = AccountSnap{
+			Head: snap.AttestorHead,
+			Seq:  snap.AttestorSeq,
+			// Class intentionally left as UNSPECIFIED for attestor chain
 		}
 
 		return nil
@@ -1940,14 +1963,14 @@ func (e *Engine) ensureGenesisOnBoot() error {
 			if seq < 1 {
 				seq = 1
 			}
-			if err := putAccount(tx, gen, head, bal, seq, pb.AccountClass_ACCOUNT_CLASS_HOT); err != nil {
+			if err := putAccount(tx, gen, head, bal, seq, pb.AccountClass_ACCOUNT_CLASS_SPENDING); err != nil {
 				return err
 			}
 		}
 
-		// --- Arbitrator genesis (idempotent and repairs partial state) ---
-		if e.cfg.GenesisArbitratorPubkey == zero {
-			return errors.New("GenesisArbitratorPubkey must be set (GENESIS_ARBITRATOR_HEX)")
+		// --- Attestor genesis (idempotent and repairs partial state) ---
+		if e.cfg.GenesisAttestorPubkey == zero {
+			return errors.New("GenesisAttestorPubkey must be set (GENESIS_ATTESTOR_HEX)")
 		}
 
 		ss, found, err := getSignerSetInTx(tx)
@@ -1955,28 +1978,28 @@ func (e *Engine) ensureGenesisOnBoot() error {
 			return fmt.Errorf("read signer set: %w", err)
 		}
 
-		arbHead, arbSeq := getArbChain(tx)
+		attestorHead, attestorSeq := getAttestorChain(tx)
 
 		needSignerSet := !found || ss == nil || len(ss.Pubkeys) == 0
-		needArbChain := arbHead == zero || arbSeq < 1
+		needAttestorChain := attestorHead == zero || attestorSeq < 1
 
 		if needSignerSet {
 			ss = &pb.SignerSet{
-				Pubkeys:   []*pb.Pub32{{V: append([]byte(nil), e.cfg.GenesisArbitratorPubkey[:]...)}},
+				Pubkeys:   []*pb.Pub32{{V: append([]byte(nil), e.cfg.GenesisAttestorPubkey[:]...)}},
 				Threshold: 1,
 			}
 			if err := putSignerSet(tx, ss); err != nil {
 				return err
 			}
-			log.Printf("[genesis] arb signer set bootstrapped key=%x", e.cfg.GenesisArbitratorPubkey[:4])
+			log.Printf("[genesis] attestor signer set bootstrapped key=%x", e.cfg.GenesisAttestorPubkey[:4])
 		}
 
-		if needArbChain {
-			arbGenesisHead := sha256.Sum256(append([]byte("ANOS_ARB_CHAIN_GENESIS_V1:"), ArbChainID[:]...))
-			if err := putArbChain(tx, arbGenesisHead, 1); err != nil {
+		if needAttestorChain {
+			attestorGenesisHead := sha256.Sum256(append([]byte("ANOS_ATTESTOR_CHAIN_GENESIS_V1:"), AttestorChainID[:]...))
+			if err := putAttestorChain(tx, attestorGenesisHead, 1); err != nil {
 				return err
 			}
-			log.Printf("[genesis] arb chain bootstrapped head=%x seq=1", arbGenesisHead[:4])
+			log.Printf("[genesis] attestor chain bootstrapped head=%x seq=1", attestorGenesisHead[:4])
 		}
 
 		return nil

@@ -58,7 +58,7 @@ func main() {
 			Fee:    fee,
 			// ReceivableId may be set after txid derivation, but is NOT part of signing bytes for SEND.
 
-			AccountClass: pb.AccountClass_ACCOUNT_CLASS_HOT,
+			AccountClass: pb.AccountClass_ACCOUNT_CLASS_SPENDING,
 		}},
 	}
 	signTx(send, alPriv)

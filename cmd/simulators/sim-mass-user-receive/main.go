@@ -111,7 +111,7 @@ func main() {
 				Seq:     st.Seq + 1,
 				Body: &pb.Tx_Receive{Receive: &pb.TxBodyReceive{
 					ReceivableId: &pb.Hash32{V: a.rid},
-					AccountClass: pb.AccountClass_ACCOUNT_CLASS_HOT,
+					AccountClass: pb.AccountClass_ACCOUNT_CLASS_SPENDING,
 				}},
 			}
 

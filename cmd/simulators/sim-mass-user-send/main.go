@@ -162,7 +162,7 @@ func main() {
 					To:           &pb.AccountId{V: toPub},
 					Amount:       amount,
 					Fee:          fee,
-					AccountClass: pb.AccountClass_ACCOUNT_CLASS_HOT,
+					AccountClass: pb.AccountClass_ACCOUNT_CLASS_SPENDING,
 				}},
 			}
 

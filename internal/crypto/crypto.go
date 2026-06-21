@@ -53,9 +53,9 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 		tbyte = 0x01
 	case pb.TxType_TX_TYPE_RECEIVE:
 		tbyte = 0x02
-	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:
+	case pb.TxType_TX_TYPE_ADD_ATTESTOR:
 		tbyte = 0x03
-	case pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+	case pb.TxType_TX_TYPE_REMOVE_ATTESTOR:
 		tbyte = 0x04
 	default:
 		tbyte = 0x00
@@ -107,24 +107,37 @@ func SignBytesACTE(tx *pb.Tx) ([]byte, error) {
 		binary.LittleEndian.PutUint32(u32[:], uint32(rb.Receive.AccountClass))
 		out = append(out, u32[:]...)
 
+		// Transfer-chain creation: when this RECEIVE opens a TRANSFER chain, the
+		// destination and unlock epoch are part of the signed bytes, so they are
+		// committed to consensus via the chain head (txid). Appended only for the
+		// TRANSFER class, so SPENDING/TIMELOCKED/etc. receives keep their exact bytes.
+		if rb.Receive.AccountClass == pb.AccountClass_ACCOUNT_CLASS_TRANSFER {
+			if rb.Receive.TransferDestination == nil || len(rb.Receive.TransferDestination.V) != 32 {
+				return nil, ErrMissingField
+			}
+			out = append(out, rb.Receive.TransferDestination.V...)
+			binary.LittleEndian.PutUint64(u64[:], rb.Receive.TransferUnlockEpoch)
+			out = append(out, u64[:]...)
+		}
+
 		return out, nil
 
-	case pb.TxType_TX_TYPE_ADD_ARBITRATOR:
-		ab, ok := tx.Body.(*pb.Tx_AddArbitrator)
-		if !ok || ab.AddArbitrator == nil || ab.AddArbitrator.Pubkey == nil || len(ab.AddArbitrator.Pubkey.V) != 32 {
+	case pb.TxType_TX_TYPE_ADD_ATTESTOR:
+		ab, ok := tx.Body.(*pb.Tx_AddAttestor)
+		if !ok || ab.AddAttestor == nil || ab.AddAttestor.Pubkey == nil || len(ab.AddAttestor.Pubkey.V) != 32 {
 			return nil, ErrMissingField
 		}
 		out = append(out, 0x03)
-		out = append(out, ab.AddArbitrator.Pubkey.V...)
+		out = append(out, ab.AddAttestor.Pubkey.V...)
 		return out, nil
 
-	case pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
-		rb, ok := tx.Body.(*pb.Tx_RemoveArbitrator)
-		if !ok || rb.RemoveArbitrator == nil || rb.RemoveArbitrator.Pubkey == nil || len(rb.RemoveArbitrator.Pubkey.V) != 32 {
+	case pb.TxType_TX_TYPE_REMOVE_ATTESTOR:
+		rb, ok := tx.Body.(*pb.Tx_RemoveAttestor)
+		if !ok || rb.RemoveAttestor == nil || rb.RemoveAttestor.Pubkey == nil || len(rb.RemoveAttestor.Pubkey.V) != 32 {
 			return nil, ErrMissingField
 		}
 		out = append(out, 0x04)
-		out = append(out, rb.RemoveArbitrator.Pubkey.V...)
+		out = append(out, rb.RemoveAttestor.Pubkey.V...)
 		return out, nil
 
 	default:
@@ -146,7 +159,7 @@ func MsgHash(tx *pb.Tx) ([32]byte, []byte, error) {
 
 // VerifyTxSignature verifies cryptographic validity of all signatures on a tx.
 // For regular txs: single ed25519 sig against the account pubkey.
-// For arb chain txs: every entry in multi_sig is verified individually.
+// For attestor chain txs: every entry in multi_sig is verified individually.
 // Threshold/quorum policy is checked separately in verify_apply.go.
 func VerifyTxSignature(tx *pb.Tx) error {
 	if tx == nil || tx.Account == nil || len(tx.Account.V) != 32 {
@@ -157,7 +170,7 @@ func VerifyTxSignature(tx *pb.Tx) error {
 		return err
 	}
 	switch tx.Type {
-	case pb.TxType_TX_TYPE_ADD_ARBITRATOR, pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+	case pb.TxType_TX_TYPE_ADD_ATTESTOR, pb.TxType_TX_TYPE_REMOVE_ATTESTOR:
 		ms := tx.MultiSig
 		if ms == nil || len(ms.Pubkeys) == 0 {
 			return ErrMissingField
@@ -190,7 +203,7 @@ func VerifyTxSignature(tx *pb.Tx) error {
 }
 
 // TxID computes txid = SHA256(sign_bytes || sig) for regular txs.
-// For multisig arb txs: SHA256(sign_bytes || sorted_concat(all_sigs)).
+// For multisig attestor txs: SHA256(sign_bytes || sorted_concat(all_sigs)).
 // Sorting makes TxID deterministic regardless of sig submission order.
 func TxID(tx *pb.Tx) ([32]byte, error) {
 	_, sb, err := MsgHash(tx)
@@ -198,7 +211,7 @@ func TxID(tx *pb.Tx) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	switch tx.Type {
-	case pb.TxType_TX_TYPE_ADD_ARBITRATOR, pb.TxType_TX_TYPE_REMOVE_ARBITRATOR:
+	case pb.TxType_TX_TYPE_ADD_ATTESTOR, pb.TxType_TX_TYPE_REMOVE_ATTESTOR:
 		ms := tx.MultiSig
 		if ms == nil || len(ms.Sigs) == 0 {
 			return [32]byte{}, ErrMissingField
