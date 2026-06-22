@@ -242,10 +242,9 @@ func (e *Engine) SubmitTx(raw []byte) error {
 	return nil
 }
 
-func (e *Engine) AccountState(acct [32]byte) (head [32]byte, bal uint64, seq uint64, class pb.AccountClass, err error) {
+func (e *Engine) AccountState(acct [32]byte) (rec AccountRecord, err error) {
 	err = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-		h, b, s, cl := getAccount(tx, acct)
-		head, bal, seq, class = h, b, s, cl
+		rec, _ = getAccountRecord(tx, acct) // zero-value record for a missing account
 		return nil
 	})
 	return

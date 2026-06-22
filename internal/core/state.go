@@ -191,6 +191,11 @@ type AccountHeadRow struct {
 	Balance uint64
 	Seq     uint64
 	Class   pb.AccountClass
+
+	// Transfer-chain metadata; only meaningful when Class == ACCOUNT_CLASS_TRANSFER.
+	TransferSource [32]byte
+	TransferDest   [32]byte
+	TransferUnlock uint64
 }
 
 // ListAllAccountHeads reads the current heads for all accounts from the DB.
@@ -210,7 +215,7 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 			if len(k) != 32 {
 				continue
 			}
-			head, bal, seq, class, ok := unpackAccount(v)
+			r, ok := unpackAccountRecord(v)
 			if !ok {
 				continue
 			}
@@ -219,11 +224,14 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 			copy(acct[:], k)
 
 			out = append(out, AccountHeadRow{
-				Account: acct,
-				Head:    head,
-				Balance: bal,
-				Seq:     seq,
-				Class:   class,
+				Account:        acct,
+				Head:           r.Head,
+				Balance:        r.Balance,
+				Seq:            r.Seq,
+				Class:          r.Class,
+				TransferSource: r.TransferSource,
+				TransferDest:   r.TransferDest,
+				TransferUnlock: r.TransferUnlock,
 			})
 		}
 		return nil

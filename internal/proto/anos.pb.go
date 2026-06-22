@@ -1375,12 +1375,17 @@ type AccountState struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Account *AccountId             `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"`
 	// Current head tx hash (zero/empty means genesis head)
-	Head          *Hash32      `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`
-	Balance       uint64       `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"`
-	Seq           uint64       `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`
-	AccountClass  AccountClass `protobuf:"varint,5,opt,name=account_class,json=accountClass,proto3,enum=anos.v2.AccountClass" json:"account_class,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Head         *Hash32      `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`
+	Balance      uint64       `protobuf:"varint,3,opt,name=balance,proto3" json:"balance,omitempty"`
+	Seq          uint64       `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`
+	AccountClass AccountClass `protobuf:"varint,5,opt,name=account_class,json=accountClass,proto3,enum=anos.v2.AccountClass" json:"account_class,omitempty"`
+	// Transfer-chain metadata; populated only when account_class == TRANSFER.
+	// These mirror the immutable fields stored on a transfer chain's account record.
+	TransferSource      *AccountId `protobuf:"bytes,6,opt,name=transfer_source,json=transferSource,proto3" json:"transfer_source,omitempty"`                   // the funder / return target
+	TransferDestination *AccountId `protobuf:"bytes,7,opt,name=transfer_destination,json=transferDestination,proto3" json:"transfer_destination,omitempty"`    // the release target (allowed at/after unlock)
+	TransferUnlockEpoch uint64     `protobuf:"varint,8,opt,name=transfer_unlock_epoch,json=transferUnlockEpoch,proto3" json:"transfer_unlock_epoch,omitempty"` // epoch at/after which release is allowed
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AccountState) Reset() {
@@ -1446,6 +1451,27 @@ func (x *AccountState) GetAccountClass() AccountClass {
 		return x.AccountClass
 	}
 	return AccountClass_ACCOUNT_CLASS_UNSPECIFIED
+}
+
+func (x *AccountState) GetTransferSource() *AccountId {
+	if x != nil {
+		return x.TransferSource
+	}
+	return nil
+}
+
+func (x *AccountState) GetTransferDestination() *AccountId {
+	if x != nil {
+		return x.TransferDestination
+	}
+	return nil
+}
+
+func (x *AccountState) GetTransferUnlockEpoch() uint64 {
+	if x != nil {
+		return x.TransferUnlockEpoch
+	}
+	return 0
 }
 
 type GetAccountRequest struct {
@@ -2607,13 +2633,16 @@ const file_proto_anos_proto_rawDesc = "" +
 	"\x10SubmitTxResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12#\n" +
 	"\x04txid\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x04txid\x12'\n" +
-	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error\"\xc9\x01\n" +
+	"\x05error\x18\x03 \x01(\v2\x11.anos.v2.ApiErrorR\x05error\"\x81\x03\n" +
 	"\fAccountState\x12,\n" +
 	"\aaccount\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\x12#\n" +
 	"\x04head\x18\x02 \x01(\v2\x0f.anos.v2.Hash32R\x04head\x12\x18\n" +
 	"\abalance\x18\x03 \x01(\x04R\abalance\x12\x10\n" +
 	"\x03seq\x18\x04 \x01(\x04R\x03seq\x12:\n" +
-	"\raccount_class\x18\x05 \x01(\x0e2\x15.anos.v2.AccountClassR\faccountClass\"A\n" +
+	"\raccount_class\x18\x05 \x01(\x0e2\x15.anos.v2.AccountClassR\faccountClass\x12;\n" +
+	"\x0ftransfer_source\x18\x06 \x01(\v2\x12.anos.v2.AccountIdR\x0etransferSource\x12E\n" +
+	"\x14transfer_destination\x18\a \x01(\v2\x12.anos.v2.AccountIdR\x13transferDestination\x122\n" +
+	"\x15transfer_unlock_epoch\x18\b \x01(\x04R\x13transferUnlockEpoch\"A\n" +
 	"\x11GetAccountRequest\x12,\n" +
 	"\aaccount\x18\x01 \x01(\v2\x12.anos.v2.AccountIdR\aaccount\"z\n" +
 	"\x12GetAccountResponse\x12\x0e\n" +
@@ -2798,41 +2827,43 @@ var file_proto_anos_proto_depIdxs = []int32{
 	5,  // 41: anos.v2.AccountState.account:type_name -> anos.v2.AccountId
 	2,  // 42: anos.v2.AccountState.head:type_name -> anos.v2.Hash32
 	1,  // 43: anos.v2.AccountState.account_class:type_name -> anos.v2.AccountClass
-	5,  // 44: anos.v2.GetAccountRequest.account:type_name -> anos.v2.AccountId
-	20, // 45: anos.v2.GetAccountResponse.state:type_name -> anos.v2.AccountState
-	17, // 46: anos.v2.GetAccountResponse.error:type_name -> anos.v2.ApiError
-	5,  // 47: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
-	15, // 48: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
-	17, // 49: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
-	4,  // 50: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
-	2,  // 51: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
-	4,  // 52: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
-	2,  // 53: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
-	4,  // 54: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
-	14, // 55: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
-	4,  // 56: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
-	2,  // 57: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
-	2,  // 58: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
-	25, // 59: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
-	2,  // 60: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
-	2,  // 61: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
-	4,  // 62: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
-	25, // 63: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
-	30, // 64: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
-	5,  // 65: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
-	2,  // 66: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
-	5,  // 67: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
-	35, // 68: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
-	5,  // 69: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
-	5,  // 70: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
-	2,  // 71: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
-	2,  // 72: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
-	14, // 73: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
-	74, // [74:74] is the sub-list for method output_type
-	74, // [74:74] is the sub-list for method input_type
-	74, // [74:74] is the sub-list for extension type_name
-	74, // [74:74] is the sub-list for extension extendee
-	0,  // [0:74] is the sub-list for field type_name
+	5,  // 44: anos.v2.AccountState.transfer_source:type_name -> anos.v2.AccountId
+	5,  // 45: anos.v2.AccountState.transfer_destination:type_name -> anos.v2.AccountId
+	5,  // 46: anos.v2.GetAccountRequest.account:type_name -> anos.v2.AccountId
+	20, // 47: anos.v2.GetAccountResponse.state:type_name -> anos.v2.AccountState
+	17, // 48: anos.v2.GetAccountResponse.error:type_name -> anos.v2.ApiError
+	5,  // 49: anos.v2.ListReceivablesRequest.account:type_name -> anos.v2.AccountId
+	15, // 50: anos.v2.ListReceivablesResponse.receivables:type_name -> anos.v2.Receivable
+	17, // 51: anos.v2.ListReceivablesResponse.error:type_name -> anos.v2.ApiError
+	4,  // 52: anos.v2.TxInv.from:type_name -> anos.v2.Pub32
+	2,  // 53: anos.v2.TxInv.txid:type_name -> anos.v2.Hash32
+	4,  // 54: anos.v2.TxWant.from:type_name -> anos.v2.Pub32
+	2,  // 55: anos.v2.TxWant.txid:type_name -> anos.v2.Hash32
+	4,  // 56: anos.v2.TxPush.from:type_name -> anos.v2.Pub32
+	14, // 57: anos.v2.TxPush.tx:type_name -> anos.v2.Tx
+	4,  // 58: anos.v2.CandidateListV2.proposer:type_name -> anos.v2.Pub32
+	2,  // 59: anos.v2.CandidateListV2.txid:type_name -> anos.v2.Hash32
+	2,  // 60: anos.v2.CandidateListV2.list_hash:type_name -> anos.v2.Hash32
+	25, // 61: anos.v2.CandidateListV2.sig:type_name -> anos.v2.SigDER
+	2,  // 62: anos.v2.EpochFinalization.accepted_txids_hash:type_name -> anos.v2.Hash32
+	2,  // 63: anos.v2.EpochFinalization.frontiers_root:type_name -> anos.v2.Hash32
+	4,  // 64: anos.v2.EpochFinalization.signer:type_name -> anos.v2.Pub32
+	25, // 65: anos.v2.EpochFinalization.sig:type_name -> anos.v2.SigDER
+	30, // 66: anos.v2.SyncFinalizationResponse.finalizations:type_name -> anos.v2.EpochFinalization
+	5,  // 67: anos.v2.FrontierEntry.account:type_name -> anos.v2.AccountId
+	2,  // 68: anos.v2.FrontierEntry.head:type_name -> anos.v2.Hash32
+	5,  // 69: anos.v2.SyncFrontiersRequest.cursor:type_name -> anos.v2.AccountId
+	35, // 70: anos.v2.SyncFrontiersResponse.entries:type_name -> anos.v2.FrontierEntry
+	5,  // 71: anos.v2.SyncFrontiersResponse.next_cursor:type_name -> anos.v2.AccountId
+	5,  // 72: anos.v2.SyncChainRequest.account:type_name -> anos.v2.AccountId
+	2,  // 73: anos.v2.SyncChainRequest.target_head:type_name -> anos.v2.Hash32
+	2,  // 74: anos.v2.SyncChainRequest.have:type_name -> anos.v2.Hash32
+	14, // 75: anos.v2.SyncChainResponse.tx:type_name -> anos.v2.Tx
+	76, // [76:76] is the sub-list for method output_type
+	76, // [76:76] is the sub-list for method input_type
+	76, // [76:76] is the sub-list for extension type_name
+	76, // [76:76] is the sub-list for extension extendee
+	0,  // [0:76] is the sub-list for field type_name
 }
 
 func init() { file_proto_anos_proto_init() }

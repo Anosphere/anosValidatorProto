@@ -176,6 +176,12 @@ message AccountState {
   uint64 seq = 4;
 
   AccountClass account_class = 5;
+
+  // Transfer-chain metadata; populated only when account_class == TRANSFER.
+  // These mirror the immutable fields stored on a transfer chain's account record.
+  AccountId transfer_source = 6;       // the funder / return target
+  AccountId transfer_destination = 7;  // the release target (allowed at/after unlock)
+  uint64    transfer_unlock_epoch = 8; // epoch at/after which release is allowed
 }
 
 message GetAccountRequest {

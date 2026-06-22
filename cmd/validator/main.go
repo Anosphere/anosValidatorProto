@@ -557,7 +557,7 @@ func main() {
 		var acct [32]byte
 		copy(acct[:], req.Account.V)
 
-		head, bal, seq, class, err := engine.AccountState(acct)
+		rec, err := engine.AccountState(acct)
 		resp := &pb.GetAccountResponse{Ok: false}
 		if err != nil {
 			resp.Error = &pb.ApiError{Code: 500, Message: "error", Detail: err.Error()}
@@ -565,13 +565,20 @@ func main() {
 			return
 		}
 
-		resp.State = &pb.AccountState{
+		state := &pb.AccountState{
 			Account:      &pb.AccountId{V: req.Account.V},
-			Head:         &pb.Hash32{V: head[:]},
-			Balance:      bal,
-			Seq:          seq,
-			AccountClass: class,
+			Head:         &pb.Hash32{V: rec.Head[:]},
+			Balance:      rec.Balance,
+			Seq:          rec.Seq,
+			AccountClass: rec.Class,
 		}
+		// Surface transfer-chain metadata for TRANSFER accounts (zero/absent otherwise).
+		if rec.Class == pb.AccountClass_ACCOUNT_CLASS_TRANSFER {
+			state.TransferSource = &pb.AccountId{V: rec.TransferSource[:]}
+			state.TransferDestination = &pb.AccountId{V: rec.TransferDest[:]}
+			state.TransferUnlockEpoch = rec.TransferUnlock
+		}
+		resp.State = state
 		resp.Ok = true
 		_ = writeProtoRaw(w, resp)
 	})
@@ -711,17 +718,28 @@ func main() {
 			Balance uint64 `json:"balance"`
 			Seq     uint64 `json:"seq"`
 			Class   string `json:"class"`
+
+			// Transfer-chain metadata (populated only for TRANSFER accounts).
+			TransferSource string `json:"transfer_source,omitempty"`
+			TransferDest   string `json:"transfer_destination,omitempty"`
+			TransferUnlock uint64 `json:"transfer_unlock_epoch,omitempty"`
 		}
 
 		out := make([]rowJSON, 0, len(rows))
 		for _, rr := range rows {
-			out = append(out, rowJSON{
+			row := rowJSON{
 				Account: hex.EncodeToString(rr.Account[:]),
 				Head:    hex.EncodeToString(rr.Head[:]),
 				Balance: rr.Balance,
 				Seq:     rr.Seq,
 				Class:   rr.Class.String(),
-			})
+			}
+			if rr.Class == pb.AccountClass_ACCOUNT_CLASS_TRANSFER {
+				row.TransferSource = hex.EncodeToString(rr.TransferSource[:])
+				row.TransferDest = hex.EncodeToString(rr.TransferDest[:])
+				row.TransferUnlock = rr.TransferUnlock
+			}
+			out = append(out, row)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
