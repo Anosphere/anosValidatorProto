@@ -17,6 +17,12 @@ type accountHeadRow struct {
 	Head    string `json:"head"`
 	Balance uint64 `json:"balance"`
 	Seq     uint64 `json:"seq"`
+	Class   string `json:"class"`
+
+	// Transfer-chain metadata (present only for TRANSFER accounts).
+	TransferSource string `json:"transfer_source"`
+	TransferDest   string `json:"transfer_destination"`
+	TransferUnlock uint64 `json:"transfer_unlock_epoch"`
 }
 
 func main() {
@@ -93,25 +99,37 @@ func printTable(rows []accountHeadRow) {
 	fmt.Println("========")
 
 	fmt.Printf(
-		"%-66s %-66s %12s %6s\n",
+		"%-66s %-66s %12s %6s %8s\n",
 		"ACCOUNT",
 		"HEAD",
 		"BALANCE",
 		"SEQ",
+		"CLASS",
 	)
-	fmt.Println(stringsRepeat("-", 66+1+66+1+12+1+6))
+	fmt.Println(stringsRepeat("-", 66+1+66+1+12+1+6+1+8))
 
 	for _, r := range rows {
 		acct := shortenHex(r.Account, 32)
 		head := shortenHex(r.Head, 32)
 
 		fmt.Printf(
-			"%-66s %-66s %12d %6d\n",
+			"%-66s %-66s %12d %6d %8s\n",
 			acct,
 			head,
 			r.Balance,
 			r.Seq,
+			r.Class,
 		)
+
+		// For transfer chains, print an indented detail line with the immutable
+		// source/destination/unlock_epoch so the list shows the transfer's parameters.
+		if r.Class == "ACCOUNT_CLASS_TRANSFER" {
+			fmt.Printf("      ↳ transfer: source=%s  dest=%s  unlock_epoch=%d\n",
+				shortenHex(r.TransferSource, 8),
+				shortenHex(r.TransferDest, 8),
+				r.TransferUnlock,
+			)
+		}
 	}
 
 	fmt.Println()

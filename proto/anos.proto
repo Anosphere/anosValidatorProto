@@ -21,8 +21,17 @@ enum TxType {
   TX_TYPE_UNSPECIFIED        = 0;
   TX_TYPE_SEND               = 1;
   TX_TYPE_RECEIVE            = 2;
-  TX_TYPE_ADD_ARBITRATOR     = 3;
-  TX_TYPE_REMOVE_ARBITRATOR  = 4;
+  TX_TYPE_ADD_ATTESTOR       = 3;
+  TX_TYPE_REMOVE_ATTESTOR    = 4;
+}
+
+enum AccountClass {
+  ACCOUNT_CLASS_UNSPECIFIED = 0;
+  ACCOUNT_CLASS_SPENDING    = 1;
+  ACCOUNT_CLASS_TIMELOCKED  = 2;
+  ACCOUNT_CLASS_GUARDED     = 3;
+  ACCOUNT_CLASS_VAULT       = 4;
+  ACCOUNT_CLASS_TRANSFER    = 5; // a special-purpose transfer chain (created by its first RECEIVE)
 }
 
 message TxBodySend {
@@ -30,17 +39,26 @@ message TxBodySend {
   uint64 amount = 2;
   uint64 fee = 3;
   Hash32 receivable_id = 4; // deterministically derived from txid
+  AccountClass account_class = 5;
 }
 
 message TxBodyReceive {
   Hash32 receivable_id = 1;
+  AccountClass account_class = 2;
+
+  // Transfer-chain creation fields. Only meaningful when account_class == TRANSFER
+  // (i.e. this RECEIVE is the first block of a new transfer chain). Both are part of
+  // the signed bytes for a TRANSFER receive (see SignBytesACTE), so they are committed
+  // to consensus via the chain head. Ignored for all other classes.
+  AccountId transfer_destination = 3;   // where the transfer releases to after unlock
+  uint64    transfer_unlock_epoch = 4;  // epoch at/after which release is allowed
 }
 
-message TxBodyAddArbitrator {
+message TxBodyAddAttestor {
   Pub32 pubkey = 1;  // ed25519 pubkey being added (32 bytes)
 }
 
-message TxBodyRemoveArbitrator {
+message TxBodyRemoveAttestor {
   Pub32 pubkey = 1;  // ed25519 pubkey being removed (32 bytes)
 }
 
@@ -72,8 +90,8 @@ message TxSignable {
   oneof body {
     TxBodySend             send              = 10;
     TxBodyReceive          receive           = 11;
-    TxBodyAddArbitrator    add_arbitrator    = 12;
-    TxBodyRemoveArbitrator remove_arbitrator = 13;
+    TxBodyAddAttestor      add_attestor      = 12;
+    TxBodyRemoveAttestor   remove_attestor   = 13;
   }
 }
 
@@ -87,8 +105,8 @@ message Tx {
   oneof body {
     TxBodySend             send              = 10;
     TxBodyReceive          receive           = 11;
-    TxBodyAddArbitrator    add_arbitrator    = 12;
-    TxBodyRemoveArbitrator remove_arbitrator = 13;
+    TxBodyAddAttestor      add_attestor      = 12;
+    TxBodyRemoveAttestor   remove_attestor   = 13;
   }
 
   Sig64 sig = 20;         // signature over TxSignable canonical bytes (see above)
@@ -104,6 +122,13 @@ message Receivable {
   Hash32 created_by_tx = 6;
   bool claimed = 7;
   Hash32 claimed_by_tx = 8;
+
+  // Source-side routing restriction, DERIVED by the validator from the sender's account
+  // class at apply time (not signed by the sender). UNSPECIFIED = no restriction (normal
+  // SPENDING send). TRANSFER = this receivable may only be claimed by a first RECEIVE that
+  // declares class == TRANSFER (set when the sender is TIMELOCKED/GUARDED/VAULT). This is
+  // how a timelocked holder is forced to route outbound funds through a transfer chain.
+  AccountClass required_dest_class = 9;
 }
 
 message EpochRecord {
@@ -149,6 +174,14 @@ message AccountState {
 
   uint64 balance = 3;
   uint64 seq = 4;
+
+  AccountClass account_class = 5;
+
+  // Transfer-chain metadata; populated only when account_class == TRANSFER.
+  // These mirror the immutable fields stored on a transfer chain's account record.
+  AccountId transfer_source = 6;       // the funder / return target
+  AccountId transfer_destination = 7;  // the release target (allowed at/after unlock)
+  uint64    transfer_unlock_epoch = 8; // epoch at/after which release is allowed
 }
 
 message GetAccountRequest {

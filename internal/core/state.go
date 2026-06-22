@@ -20,8 +20,8 @@ var (
 	BRecv           = []byte("recv")
 	BEpochFrontiers = []byte("epoch_frontiers")
 	BFinalizations  = []byte("finalizations")
-	BSignerSets     = []byte("signer_sets") // key: ArbChainID(32) -> proto SignerSet (fast-access cache)
-	BArbChain       = []byte("arb_chain")   // key: ArbChainID(32) -> head(32) || seq(u64 BE)
+	BSignerSets     = []byte("signer_sets") // key: AttestorChainID(32) -> proto SignerSet (fast-access cache)
+	BAttestorChain       = []byte("attestor_chain")   // key: AttestorChainID(32) -> head(32) || seq(u64 BE)
 )
 
 var (
@@ -29,7 +29,7 @@ var (
 )
 
 func ensureBuckets(tx *bbolt.Tx) error {
-	for _, b := range [][]byte{BMeta, BAccounts, BTxs, BRecv, BEpochFrontiers, BFinalizations, BSignerSets, BArbChain} {
+	for _, b := range [][]byte{BMeta, BAccounts, BTxs, BRecv, BEpochFrontiers, BFinalizations, BSignerSets, BAttestorChain} {
 		if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 			return err
 		}
@@ -37,42 +37,118 @@ func ensureBuckets(tx *bbolt.Tx) error {
 	return nil
 }
 
-func packAccount(head [32]byte, balance uint64, seq uint64) []byte {
-	out := make([]byte, 32+8+8)
-	copy(out[:32], head[:])
-	binary.BigEndian.PutUint64(out[32:40], balance)
-	binary.BigEndian.PutUint64(out[40:48], seq)
+// AccountRecord is the live state of one account chain. The base fields
+// (head, balance, seq, class) exist for every account. The transfer fields exist
+// ONLY for TRANSFER-class accounts and are appended to the on-disk record; they are
+// immutable once the transfer chain is created.
+//
+// On-disk layout (big-endian):
+//
+//	head(32) | balance(8) | seq(8) | class(4)                          // base = 52 bytes
+//	[ + transferSource(32) | transferDest(32) | transferUnlock(8) ]    // +72 iff class == TRANSFER
+type AccountRecord struct {
+	Head    [32]byte
+	Balance uint64
+	Seq     uint64
+	Class   pb.AccountClass
+
+	// Transfer-chain metadata; only meaningful when Class == ACCOUNT_CLASS_TRANSFER.
+	TransferSource [32]byte // the account that funded this transfer (return target)
+	TransferDest   [32]byte // the release target (allowed only at/after TransferUnlock)
+	TransferUnlock uint64   // epoch at/after which release-to-dest is permitted
+}
+
+const (
+	accountBaseLen     = 32 + 8 + 8 + 4            // 52
+	accountTransferLen = accountBaseLen + 32 + 32 + 8 // 124
+)
+
+func packAccountRecord(r AccountRecord) []byte {
+	transfer := r.Class == pb.AccountClass_ACCOUNT_CLASS_TRANSFER
+	n := accountBaseLen
+	if transfer {
+		n = accountTransferLen
+	}
+	out := make([]byte, n)
+	copy(out[:32], r.Head[:])
+	binary.BigEndian.PutUint64(out[32:40], r.Balance)
+	binary.BigEndian.PutUint64(out[40:48], r.Seq)
+	binary.BigEndian.PutUint32(out[48:52], uint32(r.Class))
+	if transfer {
+		copy(out[52:84], r.TransferSource[:])
+		copy(out[84:116], r.TransferDest[:])
+		binary.BigEndian.PutUint64(out[116:124], r.TransferUnlock)
+	}
 	return out
 }
 
-func unpackAccount(v []byte) (head [32]byte, bal uint64, seq uint64, ok bool) {
-	if len(v) != 32+8+8 {
-		return [32]byte{}, 0, 0, false
+// unpackAccountRecord parses an account record. It uses a minimum-length guard so both
+// base (52B) and transfer (124B) records parse; the head is always bytes [0:32].
+func unpackAccountRecord(v []byte) (AccountRecord, bool) {
+	if len(v) < accountBaseLen {
+		return AccountRecord{}, false
 	}
-	copy(head[:], v[:32])
-	bal = binary.BigEndian.Uint64(v[32:40])
-	seq = binary.BigEndian.Uint64(v[40:48])
-	return head, bal, seq, true
+	var r AccountRecord
+	copy(r.Head[:], v[:32])
+	r.Balance = binary.BigEndian.Uint64(v[32:40])
+	r.Seq = binary.BigEndian.Uint64(v[40:48])
+	r.Class = pb.AccountClass(binary.BigEndian.Uint32(v[48:52]))
+	if r.Class == pb.AccountClass_ACCOUNT_CLASS_TRANSFER {
+		if len(v) < accountTransferLen {
+			return AccountRecord{}, false
+		}
+		copy(r.TransferSource[:], v[52:84])
+		copy(r.TransferDest[:], v[84:116])
+		r.TransferUnlock = binary.BigEndian.Uint64(v[116:124])
+	}
+	return r, true
 }
 
-func getAccount(tx *bbolt.Tx, acct [32]byte) (head [32]byte, bal uint64, seq uint64) {
+func getAccountRecord(tx *bbolt.Tx, acct [32]byte) (AccountRecord, bool) {
 	b := tx.Bucket(BAccounts)
 	if b == nil {
-		return [32]byte{}, 0, 0
+		return AccountRecord{}, false
 	}
 	v := b.Get(acct[:])
 	if v == nil {
-		return [32]byte{}, 0, 0
+		return AccountRecord{}, false
 	}
-	h, bbal, sseq, ok := unpackAccount(v)
-	if !ok {
-		return [32]byte{}, 0, 0
-	}
-	return h, bbal, sseq
+	return unpackAccountRecord(v)
 }
 
-func putAccount(tx *bbolt.Tx, acct [32]byte, head [32]byte, bal uint64, seq uint64) error {
-	return tx.Bucket(BAccounts).Put(acct[:], packAccount(head, bal, seq))
+func putAccountRecord(tx *bbolt.Tx, acct [32]byte, r AccountRecord) error {
+	return tx.Bucket(BAccounts).Put(acct[:], packAccountRecord(r))
+}
+
+// --- Base-field wrappers ---
+// These preserve the original signatures for callers that do not care about transfer
+// metadata (genesis, resync, frontier/head extraction, snapshot base fields). For
+// non-TRANSFER accounts they are exact equivalents of the old fixed-52-byte functions.
+// NOTE: putAccount writes NO transfer metadata, so it must never be used to write a
+// TRANSFER account — those go through putAccountRecord (read-modify-write preserves meta).
+
+func packAccount(head [32]byte, balance uint64, seq uint64, class pb.AccountClass) []byte {
+	return packAccountRecord(AccountRecord{Head: head, Balance: balance, Seq: seq, Class: class})
+}
+
+func unpackAccount(v []byte) (head [32]byte, bal uint64, seq uint64, class pb.AccountClass, ok bool) {
+	r, k := unpackAccountRecord(v)
+	if !k {
+		return [32]byte{}, 0, 0, 0, false
+	}
+	return r.Head, r.Balance, r.Seq, r.Class, true
+}
+
+func getAccount(tx *bbolt.Tx, acct [32]byte) (head [32]byte, bal uint64, seq uint64, class pb.AccountClass) {
+	r, ok := getAccountRecord(tx, acct)
+	if !ok {
+		return [32]byte{}, 0, 0, 0
+	}
+	return r.Head, r.Balance, r.Seq, r.Class
+}
+
+func putAccount(tx *bbolt.Tx, acct [32]byte, head [32]byte, bal uint64, seq uint64, class pb.AccountClass) error {
+	return putAccountRecord(tx, acct, AccountRecord{Head: head, Balance: bal, Seq: seq, Class: class})
 }
 
 func putTxRaw(tx *bbolt.Tx, txid [32]byte, raw []byte) error {
@@ -114,6 +190,12 @@ type AccountHeadRow struct {
 	Head    [32]byte
 	Balance uint64
 	Seq     uint64
+	Class   pb.AccountClass
+
+	// Transfer-chain metadata; only meaningful when Class == ACCOUNT_CLASS_TRANSFER.
+	TransferSource [32]byte
+	TransferDest   [32]byte
+	TransferUnlock uint64
 }
 
 // ListAllAccountHeads reads the current heads for all accounts from the DB.
@@ -133,7 +215,7 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 			if len(k) != 32 {
 				continue
 			}
-			head, bal, seq, ok := unpackAccount(v)
+			r, ok := unpackAccountRecord(v)
 			if !ok {
 				continue
 			}
@@ -142,10 +224,14 @@ func ListAllAccountHeads(db *bbolt.DB) ([]AccountHeadRow, error) {
 			copy(acct[:], k)
 
 			out = append(out, AccountHeadRow{
-				Account: acct,
-				Head:    head,
-				Balance: bal,
-				Seq:     seq,
+				Account:        acct,
+				Head:           r.Head,
+				Balance:        r.Balance,
+				Seq:            r.Seq,
+				Class:          r.Class,
+				TransferSource: r.TransferSource,
+				TransferDest:   r.TransferDest,
+				TransferUnlock: r.TransferUnlock,
 			})
 		}
 		return nil
@@ -212,8 +298,8 @@ func epochFrontierKey(epoch uint64, acct [32]byte) []byte {
 // SaveEpochFrontiers snapshots the current BAccounts heads into BEpochFrontiers for this epoch.
 // Call this immediately after applying winners (post-state).
 // SaveEpochFrontiers snapshots the current post-state heads into BEpochFrontiers for this epoch.
-// This includes both normal account heads from BAccounts and the synthetic arbitrator-chain head
-// under ArbChainID so frontier roots fully represent canonical state.
+// This includes both normal account heads from BAccounts and the synthetic attestor-chain head
+// under AttestorChainID so frontier roots fully represent canonical state.
 func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
 	return db.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
@@ -227,7 +313,7 @@ func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
 			if len(k) != 32 {
 				continue
 			}
-			head, _, _, ok := unpackAccount(v)
+			head, _, _, _, ok := unpackAccount(v)
 			if !ok {
 				continue
 			}
@@ -238,10 +324,10 @@ func SaveEpochFrontiers(db *bbolt.DB, epoch uint64) error {
 			}
 		}
 
-		// Also snapshot the arbitrator chain as a synthetic account frontier.
-		arbHead, _ := getArbChain(tx)
-		arbID := ArbChainID
-		if err := out.Put(epochFrontierKey(epoch, arbID), arbHead[:]); err != nil {
+		// Also snapshot the attestor chain as a synthetic account frontier.
+		attestorHead, _ := getAttestorChain(tx)
+		attestorID := AttestorChainID
+		if err := out.Put(epochFrontierKey(epoch, attestorID), attestorHead[:]); err != nil {
 			return err
 		}
 
@@ -365,7 +451,7 @@ func ComputeDryRunFrontiersRoot(db *bbolt.DB, winners map[[32]byte][32]byte) ([3
 				if len(k) != 32 {
 					continue
 				}
-				head, _, _, ok := unpackAccount(v)
+				head, _, _, _, ok := unpackAccount(v)
 				if !ok {
 					continue
 				}
@@ -375,10 +461,10 @@ func ComputeDryRunFrontiersRoot(db *bbolt.DB, winners map[[32]byte][32]byte) ([3
 			}
 		}
 
-		// Include arbitrator chain as a synthetic frontier.
-		arbID := ArbChainID
-		arbHead, _ := getArbChain(tx)
-		frontiers[arbID] = arbHead
+		// Include attestor chain as a synthetic frontier.
+		attestorID := AttestorChainID
+		attestorHead, _ := getAttestorChain(tx)
+		frontiers[attestorID] = attestorHead
 
 		return nil
 	})
@@ -412,20 +498,20 @@ func ComputeDryRunFrontiersRoot(db *bbolt.DB, winners map[[32]byte][32]byte) ([3
 	return out, nil
 }
 
-// ArbChainID is the well-known 32-byte key for the arbitrator chain in BArbChain and BSignerSets.
-// It is SHA256("ANOS_ARB_CHAIN_V1") — a deterministic constant shared by all validators.
-var ArbChainID = func() [32]byte {
-	return sha256.Sum256([]byte("ANOS_ARB_CHAIN_V1"))
+// AttestorChainID is the well-known 32-byte key for the attestor chain in BAttestorChain and BSignerSets.
+// It is SHA256("ANOS_ATTESTOR_CHAIN_V1") — a deterministic constant shared by all validators.
+var AttestorChainID = func() [32]byte {
+	return sha256.Sum256([]byte("ANOS_ATTESTOR_CHAIN_V1"))
 }()
 
-func packArbChain(head [32]byte, seq uint64) []byte {
+func packAttestorChain(head [32]byte, seq uint64) []byte {
 	out := make([]byte, 40)
 	copy(out[:32], head[:])
 	binary.BigEndian.PutUint64(out[32:40], seq)
 	return out
 }
 
-func unpackArbChain(v []byte) (head [32]byte, seq uint64, ok bool) {
+func unpackAttestorChain(v []byte) (head [32]byte, seq uint64, ok bool) {
 	if len(v) != 40 {
 		return [32]byte{}, 0, false
 	}
@@ -433,26 +519,26 @@ func unpackArbChain(v []byte) (head [32]byte, seq uint64, ok bool) {
 	return head, binary.BigEndian.Uint64(v[32:40]), true
 }
 
-func getArbChain(tx *bbolt.Tx) (head [32]byte, seq uint64) {
-	b := tx.Bucket(BArbChain)
+func getAttestorChain(tx *bbolt.Tx) (head [32]byte, seq uint64) {
+	b := tx.Bucket(BAttestorChain)
 	if b == nil {
 		return [32]byte{}, 0
 	}
-	id := ArbChainID
+	id := AttestorChainID
 	v := b.Get(id[:])
 	if v == nil {
 		return [32]byte{}, 0
 	}
-	h, s, ok := unpackArbChain(v)
+	h, s, ok := unpackAttestorChain(v)
 	if !ok {
 		return [32]byte{}, 0
 	}
 	return h, s
 }
 
-func putArbChain(tx *bbolt.Tx, head [32]byte, seq uint64) error {
-	id := ArbChainID
-	return tx.Bucket(BArbChain).Put(id[:], packArbChain(head, seq))
+func putAttestorChain(tx *bbolt.Tx, head [32]byte, seq uint64) error {
+	id := AttestorChainID
+	return tx.Bucket(BAttestorChain).Put(id[:], packAttestorChain(head, seq))
 }
 
 // GetSignerSet reads the current SignerSet from BSignerSets. Returns nil if not initialised.
@@ -463,7 +549,7 @@ func GetSignerSet(db *bbolt.DB) (*pb.SignerSet, error) {
 		if b == nil {
 			return ErrNotFound
 		}
-		id := ArbChainID
+		id := AttestorChainID
 		raw := b.Get(id[:])
 		if raw == nil {
 			return ErrNotFound
@@ -481,7 +567,7 @@ func putSignerSet(tx *bbolt.Tx, ss *pb.SignerSet) error {
 	if err != nil {
 		return err
 	}
-	id := ArbChainID
+	id := AttestorChainID
 	return tx.Bucket(BSignerSets).Put(id[:], raw)
 }
 
@@ -491,7 +577,7 @@ func getSignerSetInTx(tx *bbolt.Tx) (*pb.SignerSet, bool, error) {
 		return nil, false, nil
 	}
 
-	v := b.Get(ArbChainID[:])
+	v := b.Get(AttestorChainID[:])
 	if len(v) == 0 {
 		return nil, false, nil
 	}

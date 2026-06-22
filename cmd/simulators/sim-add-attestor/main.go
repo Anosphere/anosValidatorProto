@@ -27,46 +27,46 @@ func main() {
 	}
 	baseURL := validatorUrlList[0]
 
-	newArbHex := getenv("NEW_ARB_HEX", "")
-	if newArbHex == "" {
-		panic("NEW_ARB_HEX is required (32-byte hex ed25519 pubkey to add)")
+	newAttestorHex := getenv("NEW_ATTESTOR_HEX", "")
+	if newAttestorHex == "" {
+		panic("NEW_ATTESTOR_HEX is required (32-byte hex ed25519 pubkey to add)")
 	}
-	newArbBytes, err := hex.DecodeString(newArbHex)
-	if err != nil || len(newArbBytes) != 32 {
-		panic("NEW_ARB_HEX must decode to exactly 32 bytes")
+	newAttestorBytes, err := hex.DecodeString(newAttestorHex)
+	if err != nil || len(newAttestorBytes) != 32 {
+		panic("NEW_ATTESTOR_HEX must decode to exactly 32 bytes")
 	}
 
-	privKeysCSV := getenv("ARB_PRIV_KEYS", "")
+	privKeysCSV := getenv("ATTESTOR_PRIV_KEYS", "")
 	if privKeysCSV == "" {
-		panic("ARB_PRIV_KEYS is required (csv of 64-byte hex ed25519 private keys of all current arbitrators)")
+		panic("ATTESTOR_PRIV_KEYS is required (csv of 64-byte hex ed25519 private keys of all current attestors)")
 	}
 	privKeys := parsePrivKeys(privKeysCSV)
 
-	// Fetch current arb chain state from the validator.
+	// Fetch current attestor chain state from the validator.
 	chainState := mustGetSignerSet(baseURL)
-	fmt.Printf("arb_chain_head=%s\n", chainState.ArbChainHead)
-	fmt.Printf("arb_chain_seq=%d\n", chainState.ArbChainSeq)
-	fmt.Printf("current arbitrators (%d):\n", len(chainState.Pubkeys))
+	fmt.Printf("attestor_chain_head=%s\n", chainState.AttestorChainHead)
+	fmt.Printf("attestor_chain_seq=%d\n", chainState.AttestorChainSeq)
+	fmt.Printf("current attestors (%d):\n", len(chainState.Pubkeys))
 	for _, p := range chainState.Pubkeys {
 		fmt.Printf("  %s\n", p)
 	}
 
-	headBytes, err := hex.DecodeString(chainState.ArbChainHead)
+	headBytes, err := hex.DecodeString(chainState.AttestorChainHead)
 	if err != nil || len(headBytes) != 32 {
-		panic("bad arb_chain_head from server")
+		panic("bad attestor_chain_head from server")
 	}
 	var head [32]byte
 	copy(head[:], headBytes)
 
-	arbChainID := sha256.Sum256([]byte("ANOS_ARB_CHAIN_V1"))
+	attestorChainID := sha256.Sum256([]byte("ANOS_ATTESTOR_CHAIN_V1"))
 
 	tx := &pb.Tx{
-		Type:    pb.TxType_TX_TYPE_ADD_ARBITRATOR,
-		Account: &pb.AccountId{V: arbChainID[:]},
+		Type:    pb.TxType_TX_TYPE_ADD_ATTESTOR,
+		Account: &pb.AccountId{V: attestorChainID[:]},
 		Prev:    &pb.Hash32{V: head[:]},
-		Seq:     chainState.ArbChainSeq + 1,
-		Body: &pb.Tx_AddArbitrator{AddArbitrator: &pb.TxBodyAddArbitrator{
-			Pubkey: &pb.Pub32{V: newArbBytes},
+		Seq:     chainState.AttestorChainSeq + 1,
+		Body: &pb.Tx_AddAttestor{AddAttestor: &pb.TxBodyAddAttestor{
+			Pubkey: &pb.Pub32{V: newAttestorBytes},
 		}},
 	}
 
@@ -92,7 +92,7 @@ func main() {
 
 	req := &pb.SubmitTxRequest{Tx: tx}
 	resp := &pb.SubmitTxResponse{}
-	if err := postProto(baseURL+"/arbitrator/submit", req, resp); err != nil {
+	if err := postProto(baseURL+"/attestor/submit", req, resp); err != nil {
 		panic(err)
 	}
 	if !resp.Ok {
@@ -102,14 +102,14 @@ func main() {
 }
 
 type signerSetResp struct {
-	ArbChainHead string   `json:"arb_chain_head"`
-	ArbChainSeq  uint64   `json:"arb_chain_seq"`
+	AttestorChainHead string   `json:"attestor_chain_head"`
+	AttestorChainSeq  uint64   `json:"attestor_chain_seq"`
 	Pubkeys      []string `json:"pubkeys"`
 	Threshold    uint32   `json:"threshold"`
 }
 
 func mustGetSignerSet(baseURL string) signerSetResp {
-	resp, err := http.Get(baseURL + "/arbitrator/signer-set")
+	resp, err := http.Get(baseURL + "/attestor/signer-set")
 	if err != nil {
 		panic(err)
 	}
@@ -135,12 +135,12 @@ func parsePrivKeys(csv string) []ed25519.PrivateKey {
 		}
 		b, err := hex.DecodeString(p)
 		if err != nil || len(b) != 64 {
-			panic(fmt.Sprintf("ARB_PRIV_KEYS: each key must be 64-byte hex, got len=%d", len(b)))
+			panic(fmt.Sprintf("ATTESTOR_PRIV_KEYS: each key must be 64-byte hex, got len=%d", len(b)))
 		}
 		out = append(out, ed25519.PrivateKey(b))
 	}
 	if len(out) == 0 {
-		panic("ARB_PRIV_KEYS: no valid keys found")
+		panic("ATTESTOR_PRIV_KEYS: no valid keys found")
 	}
 	return out
 }

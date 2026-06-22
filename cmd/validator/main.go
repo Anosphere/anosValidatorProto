@@ -102,17 +102,27 @@ func main() {
 		log.Fatal("GENESIS_SUPPLY_UNITS must be uint64")
 	}
 
-	arbHex := strings.TrimSpace(os.Getenv("GENESIS_ARBITRATOR_HEX"))
-	if arbHex == "" {
-		log.Fatal("GENESIS_ARBITRATOR_HEX is required (32-byte hex ed25519 public key)")
+	attestorHex := strings.TrimSpace(os.Getenv("GENESIS_ATTESTOR_HEX"))
+	if attestorHex == "" {
+		log.Fatal("GENESIS_ATTESTOR_HEX is required (32-byte hex ed25519 public key)")
 	}
-	arbBytes, err := hex.DecodeString(arbHex)
-	if err != nil || len(arbBytes) != 32 {
-		log.Fatal("GENESIS_ARBITRATOR_HEX must decode to exactly 32 bytes")
+	attestorBytes, err := hex.DecodeString(attestorHex)
+	if err != nil || len(attestorBytes) != 32 {
+		log.Fatal("GENESIS_ATTESTOR_HEX must decode to exactly 32 bytes")
 	}
-	var genesisArbKey [32]byte
-	copy(genesisArbKey[:], arbBytes)
-	fmt.Println("Genesis Arbitrator Key:", hex.EncodeToString(genesisArbKey[:]))
+	var genesisAttestorKey [32]byte
+	copy(genesisAttestorKey[:], attestorBytes)
+	fmt.Println("Genesis Attestor Key:", hex.EncodeToString(genesisAttestorKey[:]))
+
+	// TIMELOCKED_DELAY_EPOCHS is the minimum timelock (in epochs) for funds moving out of a
+	// TIMELOCKED account through a transfer chain. CONSENSUS-CRITICAL: must be byte-identical
+	// on every validator, exactly like EPOCH_MS / GENESIS_UNIX_MS. Default ~1 week (@5s epochs);
+	// local test .env files set a small value (e.g. 12 ≈ 1 minute).
+	timelockedDelayEpochs, err := strconv.ParseUint(strings.TrimSpace(getenv("TIMELOCKED_DELAY_EPOCHS", "120960")), 10, 64)
+	if err != nil {
+		log.Fatal("TIMELOCKED_DELAY_EPOCHS must be a uint64 (number of epochs)")
+	}
+	fmt.Println("Timelocked transfer delay (epochs):", timelockedDelayEpochs)
 
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
@@ -134,7 +144,8 @@ func main() {
 		FundAccount:               fundAcct,
 		GenesisAccount:            genesisAcct,
 		GenesisSupply:             genSupply,
-		GenesisArbitratorPubkey:   genesisArbKey,
+		GenesisAttestorPubkey:   genesisAttestorKey,
+		TimelockedDelayEpochs:   timelockedDelayEpochs,
 	})
 
 	if err != nil {
@@ -144,33 +155,6 @@ func main() {
 	engine.Start(ctx)
 
 	mux := http.NewServeMux()
-
-	// POST /faucet?acct=<hex32>&amount=<u64> (dev/admin)
-	mux.HandleFunc("/faucet", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		acctHex := r.URL.Query().Get("acct")
-		amountStr := r.URL.Query().Get("amount")
-		acctBytes, err := hex.DecodeString(strings.TrimSpace(acctHex))
-		if err != nil || len(acctBytes) != 32 {
-			http.Error(w, "need ?acct=<hex32>", 400)
-			return
-		}
-		amt, err := strconv.ParseUint(strings.TrimSpace(amountStr), 10, 64)
-		if err != nil {
-			http.Error(w, "need ?amount=<u64>", 400)
-			return
-		}
-		var acct [32]byte
-		copy(acct[:], acctBytes)
-		if err := engine.Faucet(acct, amt); err != nil {
-			http.Error(w, "error", 500)
-			return
-		}
-		w.WriteHeader(200)
-	})
 
 	// ---- Peer endpoints (protobuf-delimited streams) ----
 
@@ -573,7 +557,7 @@ func main() {
 		var acct [32]byte
 		copy(acct[:], req.Account.V)
 
-		head, bal, seq, err := engine.AccountState(acct)
+		rec, err := engine.AccountState(acct)
 		resp := &pb.GetAccountResponse{Ok: false}
 		if err != nil {
 			resp.Error = &pb.ApiError{Code: 500, Message: "error", Detail: err.Error()}
@@ -581,12 +565,20 @@ func main() {
 			return
 		}
 
-		resp.State = &pb.AccountState{
-			Account: &pb.AccountId{V: req.Account.V},
-			Head:    &pb.Hash32{V: head[:]},
-			Balance: bal,
-			Seq:     seq,
+		state := &pb.AccountState{
+			Account:      &pb.AccountId{V: req.Account.V},
+			Head:         &pb.Hash32{V: rec.Head[:]},
+			Balance:      rec.Balance,
+			Seq:          rec.Seq,
+			AccountClass: rec.Class,
 		}
+		// Surface transfer-chain metadata for TRANSFER accounts (zero/absent otherwise).
+		if rec.Class == pb.AccountClass_ACCOUNT_CLASS_TRANSFER {
+			state.TransferSource = &pb.AccountId{V: rec.TransferSource[:]}
+			state.TransferDestination = &pb.AccountId{V: rec.TransferDest[:]}
+			state.TransferUnlockEpoch = rec.TransferUnlock
+		}
+		resp.State = state
 		resp.Ok = true
 		_ = writeProtoRaw(w, resp)
 	})
@@ -635,8 +627,8 @@ func main() {
 		_ = writeProtoRaw(w, resp)
 	})
 
-	// POST /arbitrator/submit — submit a TX_TYPE_ADD_ARBITRATOR or TX_TYPE_REMOVE_ARBITRATOR
-	mux.HandleFunc("/arbitrator/submit", func(w http.ResponseWriter, r *http.Request) {
+	// POST /attestor/submit — submit a TX_TYPE_ADD_ATTESTOR or TX_TYPE_REMOVE_ATTESTOR
+	mux.HandleFunc("/attestor/submit", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -650,8 +642,8 @@ func main() {
 			http.Error(w, "missing tx", 400)
 			return
 		}
-		if req.Tx.Type != pb.TxType_TX_TYPE_ADD_ARBITRATOR && req.Tx.Type != pb.TxType_TX_TYPE_REMOVE_ARBITRATOR {
-			http.Error(w, "type must be ADD_ARBITRATOR or REMOVE_ARBITRATOR", 400)
+		if req.Tx.Type != pb.TxType_TX_TYPE_ADD_ATTESTOR && req.Tx.Type != pb.TxType_TX_TYPE_REMOVE_ATTESTOR {
+			http.Error(w, "type must be ADD_ATTESTOR or REMOVE_ATTESTOR", 400)
 			return
 		}
 		raw, err := core.CanonicalTxBytes(req.Tx)
@@ -660,7 +652,7 @@ func main() {
 			return
 		}
 		txid, _ := crypto.TxID(req.Tx)
-		log.Printf("[api] rx /arbitrator/submit txid=%x type=%s", txid[:4], req.Tx.Type.String())
+		log.Printf("[api] rx /attestor/submit txid=%x type=%s", txid[:4], req.Tx.Type.String())
 		resp := &pb.SubmitTxResponse{Ok: false}
 		if err := engine.SubmitTx(raw); err != nil {
 			resp.Error = &pb.ApiError{Code: 400, Message: "reject", Detail: err.Error()}
@@ -672,8 +664,8 @@ func main() {
 		_ = writeProtoRaw(w, resp)
 	})
 
-	// GET /arbitrator/signer-set — returns current signer set as JSON
-	mux.HandleFunc("/arbitrator/signer-set", func(w http.ResponseWriter, r *http.Request) {
+	// GET /attestor/signer-set — returns current signer set as JSON
+	mux.HandleFunc("/attestor/signer-set", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
@@ -683,16 +675,16 @@ func main() {
 			http.Error(w, "not found: "+err.Error(), 404)
 			return
 		}
-		head, seq, _ := engine.ArbChainState()
+		head, seq, _ := engine.AttestorChainState()
 		type out struct {
-			ArbChainHead string   `json:"arb_chain_head"`
-			ArbChainSeq  uint64   `json:"arb_chain_seq"`
+			AttestorChainHead string   `json:"attestor_chain_head"`
+			AttestorChainSeq  uint64   `json:"attestor_chain_seq"`
 			Pubkeys      []string `json:"pubkeys"`
 			Threshold    uint32   `json:"threshold"`
 		}
 		resp := out{
-			ArbChainHead: hex.EncodeToString(head[:]),
-			ArbChainSeq:  seq,
+			AttestorChainHead: hex.EncodeToString(head[:]),
+			AttestorChainSeq:  seq,
 			Threshold:    ss.Threshold,
 		}
 		for _, p := range ss.Pubkeys {
@@ -725,16 +717,29 @@ func main() {
 			Head    string `json:"head"`
 			Balance uint64 `json:"balance"`
 			Seq     uint64 `json:"seq"`
+			Class   string `json:"class"`
+
+			// Transfer-chain metadata (populated only for TRANSFER accounts).
+			TransferSource string `json:"transfer_source,omitempty"`
+			TransferDest   string `json:"transfer_destination,omitempty"`
+			TransferUnlock uint64 `json:"transfer_unlock_epoch,omitempty"`
 		}
 
 		out := make([]rowJSON, 0, len(rows))
 		for _, rr := range rows {
-			out = append(out, rowJSON{
+			row := rowJSON{
 				Account: hex.EncodeToString(rr.Account[:]),
 				Head:    hex.EncodeToString(rr.Head[:]),
 				Balance: rr.Balance,
 				Seq:     rr.Seq,
-			})
+				Class:   rr.Class.String(),
+			}
+			if rr.Class == pb.AccountClass_ACCOUNT_CLASS_TRANSFER {
+				row.TransferSource = hex.EncodeToString(rr.TransferSource[:])
+				row.TransferDest = hex.EncodeToString(rr.TransferDest[:])
+				row.TransferUnlock = rr.TransferUnlock
+			}
+			out = append(out, row)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

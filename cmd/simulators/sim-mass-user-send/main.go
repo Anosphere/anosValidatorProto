@@ -39,7 +39,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ERROR: VALIDATOR_URL_LIST is empty")
 		os.Exit(1)
 	}
-	baseURL := validatorUrlList[2]
+	baseURL := validatorUrlList[0]
 
 	// Recipient: USER_HEX
 	toHex := getenv("USER_HEX", "")
@@ -159,9 +159,10 @@ func main() {
 				Prev:    &pb.Hash32{V: st.Head.GetV()},
 				Seq:     st.Seq + 1,
 				Body: &pb.Tx_Send{Send: &pb.TxBodySend{
-					To:     &pb.AccountId{V: toPub},
-					Amount: amount,
-					Fee:    fee,
+					To:           &pb.AccountId{V: toPub},
+					Amount:       amount,
+					Fee:          fee,
+					AccountClass: pb.AccountClass_ACCOUNT_CLASS_SPENDING,
 				}},
 			}
 

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -298,43 +299,33 @@ func (e *Engine) fetchAllFrontiers(ctx context.Context, peer string, epoch uint6
 func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp uint64, frontiers map[[32]byte][32]byte) error {
 	peer = strings.TrimRight(peer, "/")
 
-	arbID := ArbChainID
+	attestorID := AttestorChainID
 
 	// 1) Clear only chains whose head diverged from peer.
 	// Normal accounts live in BAccounts.
-	// Arbitrator chain state lives in BArbChain + BSignerSets.
+	// Attestor chain state lives in BAttestorChain + BSignerSets.
 	if err := e.cfg.DB.Update(func(tx *bbolt.Tx) error {
 		if err := ensureBuckets(tx); err != nil {
 			return err
 		}
 
 		accBkt := tx.Bucket(BAccounts)
-		arbBkt := tx.Bucket(BArbChain)
+		attestorBkt := tx.Bucket(BAttestorChain)
 		ssBkt := tx.Bucket(BSignerSets)
 
-		for acct, peerHead := range frontiers {
-			if acct == arbID {
-				localHead, _ := getArbChain(tx)
-				if localHead != peerHead {
-					if err := arbBkt.Delete(arbID[:]); err != nil {
-						return err
-					}
-					if err := ssBkt.Delete(arbID[:]); err != nil {
-						return err
-					}
-				}
-				continue
-			}
+		// Wipe all account state — will be rebuilt from full chain replay below.
+		if err := accBkt.ForEach(func(k, _ []byte) error {
+			return accBkt.Delete(k)
+		}); err != nil {
+			return err
+		}
 
-			head, _, _, ok := unpackAccount(accBkt.Get(acct[:]))
-			if !ok || head == peerHead {
-				continue // missing or already matches
-			}
-
-			// Diverged normal account — wipe so it gets re-downloaded.
-			if err := accBkt.Delete(acct[:]); err != nil {
-				return err
-			}
+		// Wipe attestor chain state unconditionally.
+		if err := attestorBkt.Delete(attestorID[:]); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if err := ssBkt.Delete(attestorID[:]); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
 		}
 
 		// Clear epoch frontiers/finalizations (will be recomputed after sync)
@@ -352,6 +343,23 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 			return err
 		}
 
+		// Clear receivables and tx store — they are fully rebuilt from chain replay below.
+		// Stale claimed-state in BRecv would cause RECEIVE txs to be rejected as "already claimed".
+		// Stale entries in BTxs are harmless but clearing them keeps state clean.
+		if err := tx.DeleteBucket(BRecv); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(BRecv); err != nil {
+			return err
+		}
+
+		if err := tx.DeleteBucket(BTxs); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(BTxs); err != nil {
+			return err
+		}
+
 		return nil
 	}); err != nil {
 		return fmt.Errorf("resync: selective wipe: %w", err)
@@ -360,7 +368,7 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 	// 2) restore genesis anchors
 	// This is important for:
 	// - normal genesis/fund account synthetic head
-	// - arbitrator genesis signer set + arb genesis head
+	// - attestor genesis signer set + attestor genesis head
 	if err := e.ensureGenesisOnBoot(); err != nil {
 		return fmt.Errorf("resync: ensure genesis: %w", err)
 	}
@@ -372,6 +380,8 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 		idx  int
 	}
 
+	attestorGenesisHead := sha256.Sum256(append([]byte("ANOS_ATTESTOR_CHAIN_GENESIS_V1:"), attestorID[:]...))
+
 	chains := make([]*chain, 0, len(frontiers))
 	for acct, head := range frontiers {
 		// Skip zero head
@@ -379,20 +389,28 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 			continue
 		}
 
+		// Skip the attestor chain if its frontier is still the synthetic genesis head.
+		// That head is not a real tx in BTxs, so SyncChain cannot walk it.
+		// If no real attestor txs have been applied, ensureGenesisOnBoot already
+		// bootstrapped the correct attestor chain state — nothing to replay.
+		if acct == attestorID && head == attestorGenesisHead {
+			continue
+		}
+
 		// Determine the correct boundary ("have") for this chain.
 		// For normal accounts: current account head (often zero, except genesis/fund anchor).
-		// For arbitrator chain: current arb-chain head from BArbChain.
+		// For attestor chain: current attestor-chain head from BAttestorChain.
 		haveBoundary := [32]byte{}
 		err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
-			if acct == arbID {
-				// Force full arbitrator-chain download during resync.
-				// Using the synthetic local arb genesis head as a boundary can cause
-				// the peer to return only a suffix of the arb chain, which then fails
+			if acct == attestorID {
+				// Force full attestor-chain download during resync.
+				// Using the synthetic local attestor genesis head as a boundary can cause
+				// the peer to return only a suffix of the attestor chain, which then fails
 				// replay with "bad prev".
 				haveBoundary = [32]byte{}
 				return nil
 			}
-			h, _, _ := getAccount(tx, acct)
+			h, _, _, _ := getAccount(tx, acct)
 			haveBoundary = h
 			return nil
 		})
@@ -402,13 +420,13 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 
 		txsBack, reached, err := e.httpSyncChain(ctx, peer, acct, head, haveBoundary, 200000)
 		// Temp DEBUG
-		if acct == arbID {
-			e.elog(targetEp, "RESYNC arb fetch: target=%x have=%x fetched=%d reached=%v",
+		if acct == attestorID {
+			e.elog(targetEp, "RESYNC attestor fetch: target=%x have=%x fetched=%d reached=%v",
 				head[:4], haveBoundary[:4], len(txsBack), reached)
 			for i, raw := range txsBack {
 				ptx, err := ParseTx(raw)
 				if err != nil {
-					e.elog(targetEp, "RESYNC arb fetch[%d]: parse err=%v", i, err)
+					e.elog(targetEp, "RESYNC attestor fetch[%d]: parse err=%v", i, err)
 					continue
 				}
 				txid, _ := crypto.TxID(ptx)
@@ -417,7 +435,7 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 				if ptx.Prev != nil && len(ptx.Prev.V) == 32 {
 					copy(prev[:], ptx.Prev.V)
 				}
-				e.elog(targetEp, "RESYNC arb fetch[%d]: tx=%x seq=%d prev=%x",
+				e.elog(targetEp, "RESYNC attestor fetch[%d]: tx=%x seq=%d prev=%x",
 					i, txid[:4], ptx.Seq, prev[:4])
 			}
 		}
@@ -436,23 +454,23 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 			txsBack[i], txsBack[j] = txsBack[j], txsBack[i]
 		}
 
-		// For the arbitrator chain, seed local replay base from the parent of the
-		// oldest fetched arb tx rather than assuming our locally bootstrapped
+		// For the attestor chain, seed local replay base from the parent of the
+		// oldest fetched attestor tx rather than assuming our locally bootstrapped
 		// synthetic genesis head is the correct base.
 		//
-		// This makes resync robust even if the historical arb chain was created
+		// This makes resync robust even if the historical attestor chain was created
 		// with a different synthetic base head than the one this node would
 		// currently derive locally.
-		if acct == arbID && len(txsBack) > 0 {
+		if acct == attestorID && len(txsBack) > 0 {
 			oldest, err := ParseTx(txsBack[0])
 			if err != nil {
-				return fmt.Errorf("resync: parse oldest arb tx: %w", err)
+				return fmt.Errorf("resync: parse oldest attestor tx: %w", err)
 			}
 			if oldest.Prev == nil || len(oldest.Prev.V) != 32 {
-				return errors.New("resync: oldest arb tx missing prev")
+				return errors.New("resync: oldest attestor tx missing prev")
 			}
 			if oldest.Seq == 0 {
-				return errors.New("resync: oldest arb tx has invalid seq 0")
+				return errors.New("resync: oldest attestor tx has invalid seq 0")
 			}
 
 			var baseHead [32]byte
@@ -463,21 +481,21 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 				if err := ensureBuckets(tx); err != nil {
 					return err
 				}
-				return putArbChain(tx, baseHead, baseSeq)
+				return putAttestorChain(tx, baseHead, baseSeq)
 			}); err != nil {
-				return fmt.Errorf("resync: seed arb replay base: %w", err)
+				return fmt.Errorf("resync: seed attestor replay base: %w", err)
 			}
 
-			if acct == arbID && len(txsBack) > 0 {
-				e.elog(targetEp, "RESYNC arb seed: baseHead=%x baseSeq=%d", baseHead[:4], baseSeq)
+			if acct == attestorID && len(txsBack) > 0 {
+				e.elog(targetEp, "RESYNC attestor seed: baseHead=%x baseSeq=%d", baseHead[:4], baseSeq)
 
 				var checkHead [32]byte
 				var checkSeq uint64
 				if err := e.cfg.DB.View(func(tx *bbolt.Tx) error {
-					checkHead, checkSeq = getArbChain(tx)
+					checkHead, checkSeq = getAttestorChain(tx)
 					return nil
 				}); err == nil {
-					e.elog(targetEp, "RESYNC arb seed verify: head=%x seq=%d", checkHead[:4], checkSeq)
+					e.elog(targetEp, "RESYNC attestor seed verify: head=%x seq=%d", checkHead[:4], checkSeq)
 				}
 			}
 		}
@@ -522,11 +540,11 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 					return err
 				}
 				view := &bboltTxView{tx: tx}
-				if c.acct == arbID {
+				if c.acct == attestorID {
 					var curHead [32]byte
 					var curSeq uint64
 					_ = e.cfg.DB.View(func(tx *bbolt.Tx) error {
-						curHead, curSeq = getArbChain(tx)
+						curHead, curSeq = getAttestorChain(tx)
 						return nil
 					})
 
@@ -535,7 +553,7 @@ func (e *Engine) rebuildFromFrontiers(ctx context.Context, peer string, targetEp
 						copy(prev[:], ptx.Prev.V)
 					}
 
-					e.elog(targetEp, "RESYNC arb apply: tx=%x seq=%d prev=%x localHead=%x localSeq=%d",
+					e.elog(targetEp, "RESYNC attestor apply: tx=%x seq=%d prev=%x localHead=%x localSeq=%d",
 						txid[:4], ptx.Seq, prev[:4], curHead[:4], curSeq)
 				}
 				return ApplyTx(view, raw, ptx, txid, e.cfg.FundAccount)
